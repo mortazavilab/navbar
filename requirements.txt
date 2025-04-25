@@ -1,0 +1,9 @@
+streamlit>=1.20.0
+scanpy>=1.9.1
+anndata>=0.8.0
+pandas>=1.4.0
+matplotlib>=3.5.0
+numpy>=1.21.0
+scipy>=1.8.0
+pydeseq2>=0.4.3
+# logging, argparse, os, sys, collections, re, datetime are built-in
