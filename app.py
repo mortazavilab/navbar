@@ -100,7 +100,7 @@ def _load_and_process_adata(file_source, source_name):
     return success
 
 # --- Initial Setup ---
-st.set_page_config(layout="wide", page_title="Mortazavi h5ad Explorer")
+st.set_page_config(layout="wide", page_title="Navbar")
 setup_logging(LOGGING_LEVEL)
 logger = logging.getLogger(__name__)
 sc.set_figure_params(dpi=DEFAULT_PLOT_DPI, dpi_save=SAVE_PLOT_DPI)
@@ -148,12 +148,12 @@ if "active_tab" not in st.session_state:
     except:
         st.session_state.active_tab = "📄 Summary Info"
 
-st.sidebar.title("🔎 h5ad Explorer")
+st.sidebar.title("🔎 Navbar h5ad Explorer")
 # --- Argument Parsing & Initial Load (Keep existing code) ---
 # ... (rest of the argument parsing and initial load logic remains the same) ...
 parsed_args = None
 try:
-    parser = argparse.ArgumentParser(description="Streamlit Scanpy h5ad Explorer - Argument Parser")
+    parser = argparse.ArgumentParser(description="Navbar h5ad Explorer - Argument Parser")
     parser.add_argument("--h5ad", type=str, help="Path to h5ad file to load automatically via command line.")
     # Use parse_known_args to avoid conflicts with Streamlit's own args
     parsed_args, _ = parser.parse_known_args()
@@ -214,7 +214,7 @@ if initial_file_to_load and not st.session_state.initial_load_attempted:
 
 
 # --- Sidebar: File Upload and Data Selection ---
-st.sidebar.title("🔎 Scanpy h5ad Explorer")
+st.sidebar.title("🔎 Navbar h5ad Explorer")
 
 # Check if a file was provided via command line or query parameters
 file_provided_externally = initial_file_to_load is not None
