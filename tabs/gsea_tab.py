@@ -140,7 +140,7 @@ def render_gsea_tab():
                         st.session_state.gsea_error = f"Pathway Analysis Error: {e}"
                         logger.error(f"GSEA analysis failed: {e}", exc_info=True)
                     finally:
-                        st.rerun()  # Rerun to display results/errors immediately
+                        pass
 
     # --- Display GSEA Results ---
     st.markdown("---")
