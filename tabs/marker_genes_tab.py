@@ -1,4 +1,4 @@
-# scanpy_viewer/tabs/marker_genes_tab.py
+# navbar/tabs/marker_genes_tab.py
 
 import streamlit as st
 import scanpy as sc
@@ -6,6 +6,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging
 import anndata as ad # Import AnnData
+from collections import OrderedDict
+
 # Import analysis functions using relative path
 try:
     from ..analysis.marker_analysis import get_markers_df_from_uns, calculate_rank_genes_df
@@ -27,6 +29,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
     """
     Renders the content for the Marker Genes tab.
     Shows filtered marker tables (with fraction bars) and allows visualization of top N markers.
+    Includes the marker calculation form.
     """
     if not isinstance(adata_vis, ad.AnnData) or not isinstance(adata_full, ad.AnnData):
          st.error("Invalid data provided to marker genes tab.")
@@ -84,7 +87,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
             logger.debug(f"Filtering precomputed table to top {n_markers_pre_display} markers per group.")
             precomputed_markers_df_display = precomputed_markers_df_full.groupby('group').head(n_markers_pre_display).reset_index(drop=True)
 
-            # --- MODIFIED: Add column config for progress bars ---
+            # --- Add column config for progress bars ---
             column_config_pre = {}
             # Check which fraction columns exist and configure them
             # Use pct_nz_group first if available, fallback to pts
@@ -110,7 +113,6 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                       format="%.3f", min_value=0.0, max_value=1.0,
                  )
             logger.debug(f"Precomputed table column config: {column_config_pre}")
-            # --- End Modification ---
 
             # Display filtered table with configured columns
             st.dataframe(
@@ -120,7 +122,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                 column_config=column_config_pre # Apply the config
             )
 
-            # Download FULL table button (remains unchanged)
+            # Download FULL table button
             try:
                  csv_bytes = precomputed_markers_df_full.to_csv(index=False).encode('utf-8')
                  fname_base = f"precomputed_markers_ALL_{precomputed_key or 'unknown_key'}"
@@ -128,12 +130,11 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                  generate_download_button(csv_bytes, fname_csv, "Download Full Table (CSV)", "text/csv", key="download_precomputed_markers_csv_full")
             except Exception as e: st.error(f"Failed full table download prep: {e}"); logger.error(f"Precomputed full CSV download failed: {e}", exc_info=True)
 
-            # --- Visualize Top N Precomputed Markers (remains largely unchanged) ---
+            # --- Visualize Top N Precomputed Markers ---
             top_markers_pre_viz_list = precomputed_markers_df_display['names'].unique().tolist()
             top_markers_pre_viz_list = [g for g in top_markers_pre_viz_list if g in adata_vis.var_names]
             if top_markers_pre_viz_list:
                 with st.expander(f"Visualize Top {n_markers_pre_display} Precomputed Markers (Dot Plot)", expanded=True):
-                    # [ Plotting code remains the same ]
                     try:
                         logger.info(f"Plotting dotplot: top {n_markers_pre_display} precomputed markers, group='{marker_groupby_selected}'.")
                         n_groups_display = len(precomputed_markers_df_full['group'].unique())
@@ -155,6 +156,64 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
     except AnalysisError as e: st.error(f"Error extracting precomputed: {e}"); logger.error(f"Precomputed extraction failed: {e}", exc_info=True)
     except Exception as e: st.error(f"Unexpected error (precomputed): {e}"); logger.error(f"Precomputed check error: {e}", exc_info=True)
 
+    # --- Marker Gene Calculation Form ---
+    st.markdown("---")
+    st.markdown("#### Calculate Markers (on current data)")
+    st.caption(f"Runs `sc.tl.rank_genes_groups` on the current data ({adata_vis.n_obs} cells). Results will appear below the form.")
+    
+    with st.form(key="marker_calc_form"):
+        # Group by selector (mirrors display selector but needed for form submission)
+        marker_groupby_calc = st.selectbox(
+            "Group By:",
+            options=valid_obs_cat_cols,
+            # Use the selection from the *display* dropdown as the default
+            index=valid_obs_cat_cols.index(st.session_state.get('marker_group_select_display', selected_color_var)) if st.session_state.get('marker_group_select_display', selected_color_var) in valid_obs_cat_cols else 0,
+            key="marker_group_calc_form"
+        )
+        col_mark1, col_mark2 = st.columns([2,1])
+        marker_method = col_mark1.selectbox("Method:", options=MARKER_METHODS, key="marker_method_select_form")
+        n_markers_calc = col_mark2.number_input("Top N:", min_value=1, max_value=50, value=DEFAULT_N_MARKERS, key="marker_n_calc_form")
+
+        # Option to use raw data if available
+        use_raw_markers = False
+        raw_available = (adata_vis.raw is not None)
+        if raw_available:
+            use_raw_markers = st.checkbox("Use adata.raw", value=False, key="marker_use_raw_form", help="Calculate markers using data from `adata.raw.X` instead of `adata.X`")
+
+        submitted_markers = st.form_submit_button("Calculate Markers Now")
+
+        if submitted_markers:
+            st.session_state.active_tab = "🧬 Marker Genes"
+            st.session_state.calculated_markers_result_df = None # Clear previous results
+            st.session_state.calculated_markers_error = None
+            if not marker_groupby_calc:
+                st.warning("Please select a 'Group By' variable.")
+                st.session_state.calculated_markers_error = "No grouping variable selected."
+            else:
+                with st.spinner(f"Calculating markers ({marker_method}, N={n_markers_calc}, GroupBy={marker_groupby_calc}, Use Raw={use_raw_markers})..."):
+                    try:
+                        # Call analysis function from the specific module
+                        top_markers_calculated = calculate_rank_genes_df(
+                            adata_vis, # Pass the main object, function handles raw access
+                            groupby_key=marker_groupby_calc,
+                            method=marker_method,
+                            #n_genes=n_markers_calc,
+                            use_raw=use_raw_markers
+                        )
+                        st.session_state.calculated_markers_result_df = top_markers_calculated # Store in state for display
+                        st.session_state.calculated_markers_params = { # Store params for context
+                            'groupby': marker_groupby_calc,
+                            'method': marker_method,
+                            'n_genes': n_markers_calc,
+                            'use_raw': use_raw_markers
+                        }
+                        st.success("Marker calculation complete. Results displayed below.") # Add success message
+                    except (AnalysisError, ValueError, TypeError) as e:
+                        st.session_state.calculated_markers_error = f"Marker Calculation Error: {e}"
+                        logger.error(f"Marker calculation failed: {e}", exc_info=True)
+                    except Exception as e:
+                        st.session_state.calculated_markers_error = f"An unexpected error occurred during marker calculation: {e}"
+                        logger.error(f"Unexpected marker calc error: {e}", exc_info=True)
 
     # --- Calculated Markers Display ---
     st.markdown("---")
@@ -164,10 +223,13 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
     calculated_markers_df_full = None
     fig_dot_calc = None
 
-    if st.session_state.get('calculated_markers_error'): st.error(f"Calculation Failed: {st.session_state.calculated_markers_error}")
+    if st.session_state.get('calculated_markers_error'): 
+        st.error(f"Calculation Failed: {st.session_state.calculated_markers_error}")
     elif st.session_state.get('calculated_markers_result_df') is not None:
         calculated_markers_df_full = st.session_state.calculated_markers_result_df
-        params = st.session_state.get('calculated_markers_params', {}); calc_method = params.get('method', 'N/A'); calc_groupby = params.get('groupby', 'N/A')
+        params = st.session_state.get('calculated_markers_params', {})
+        calc_method = params.get('method', 'N/A')
+        calc_groupby = params.get('groupby', 'N/A')
         st.markdown(f"**Results (Method: {calc_method}, GroupBy: {calc_groupby})**")
 
         if isinstance(calculated_markers_df_full, pd.DataFrame) and not calculated_markers_df_full.empty:
@@ -181,7 +243,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
             logger.debug(f"Filtering calculated table to top {n_markers_calc_display} markers per group.")
             calculated_markers_df_display = calculated_markers_df_full.groupby('group').head(n_markers_calc_display).reset_index(drop=True)
 
-            # --- MODIFIED: Add column config for progress bars ---
+            # --- Add column config for progress bars ---
             column_config_calc = {}
             # Check which fraction columns exist and configure them
             pct_col_group_calc = None
@@ -206,7 +268,6 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                       format="%.3f", min_value=0.0, max_value=1.0,
                  )
             logger.debug(f"Calculated table column config: {column_config_calc}")
-            # --- End Modification ---
 
             # Display filtered table with configured columns
             st.dataframe(
@@ -216,7 +277,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                 column_config=column_config_calc # Apply the config
             )
 
-            # Download FULL table button (remains unchanged)
+            # Download FULL table button
             try:
                 csv_bytes = calculated_markers_df_full.to_csv(index=False).encode('utf-8')
                 fname_base = f"calculated_markers_ALL_{calc_groupby}_{calc_method}"
@@ -224,12 +285,11 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                 generate_download_button(csv_bytes, fname_csv, "Download Full Table (CSV)", "text/csv", key="download_calculated_markers_csv_full")
             except Exception as e: st.error(f"Failed full table download prep: {e}"); logger.error(f"Calculated markers full CSV download error: {e}", exc_info=True)
 
-            # --- Visualize Top N Calculated Markers (remains largely unchanged) ---
+            # --- Visualize Top N Calculated Markers ---
             top_markers_calc_viz_list = calculated_markers_df_display['names'].unique().tolist()
             top_markers_calc_viz_list = [g for g in top_markers_calc_viz_list if g in adata_vis.var_names]
             if top_markers_calc_viz_list:
                 with st.expander(f"Visualize Top {n_markers_calc_display} Calculated Markers (Dot Plot)", expanded=True):
-                    # [ Plotting code remains the same ]
                     try:
                         logger.info(f"Plotting dotplot: top {n_markers_calc_display} calculated markers, group='{calc_groupby}'.")
                         n_groups_display_calc = len(calculated_markers_df_full['group'].unique())
@@ -248,4 +308,5 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                         if fig_dot_calc: plt.close(fig_dot_calc)
             elif not calculated_markers_df_full.empty: st.info("Top calculated markers not in current data; cannot visualize.")
         else: st.warning("Marker calculation done, but no results generated or invalid.")
-    elif not st.session_state.get('calculated_markers_error'): st.info("Use form in main panel to calculate markers.")
+    elif not st.session_state.get('calculated_markers_error'): 
+        st.info("Use the form above to calculate markers.")

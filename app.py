@@ -1,4 +1,4 @@
-# scanpy_viewer/app.py
+# navbar/app.py
 
 import streamlit as st
 import scanpy as sc
@@ -441,66 +441,6 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
     tab_summary, tab_embedding, tab_gene_expr, tab_markers, tab_gsea, tab_pca, tab_deg = tab_objects
 
     # --- Analysis Execution Forms (Placed within relevant tab context) ---
-
-    # Marker Gene Calculation Form (remains in its tab)
-    with tab_markers:
-        st.markdown("---") # Separator from precomputed results display
-        st.markdown("#### Calculate Markers (on current data)")
-        st.caption(f"Runs `sc.tl.rank_genes_groups` on the current data ({adata_vis.n_obs} cells). Results will appear below the form.")
-        with st.form(key="marker_calc_form"):
-            # Group by selector (mirrors display selector but needed for form submission)
-            marker_groupby_calc = st.selectbox(
-                "Group By:",
-                options=valid_obs_cat_cols,
-                # Use the selection from the *display* dropdown as the default
-                index=valid_obs_cat_cols.index(st.session_state.get('marker_group_select_display', st.session_state.sidebar_selection_color)) if st.session_state.get('marker_group_select_display', st.session_state.sidebar_selection_color) in valid_obs_cat_cols else 0,
-                key="marker_group_calc_form"
-            )
-            col_mark1, col_mark2 = st.columns([2,1])
-            marker_method = col_mark1.selectbox("Method:", options=MARKER_METHODS, key="marker_method_select_form")
-            n_markers_calc = col_mark2.number_input("Top N:", min_value=1, max_value=50, value=DEFAULT_N_MARKERS, key="marker_n_calc_form")
-
-            # Option to use raw data if available
-            use_raw_markers = False
-            raw_available = (adata_vis.raw is not None)
-            if raw_available:
-                use_raw_markers = st.checkbox("Use adata.raw", value=False, key="marker_use_raw_form", help="Calculate markers using data from `adata.raw.X` instead of `adata.X`")
-
-            submitted_markers = st.form_submit_button("Calculate Markers Now")
-
-            if submitted_markers:
-                st.session_state.active_tab = "🧬 Marker Genes"
-                st.session_state.calculated_markers_result = None # Clear previous results
-                st.session_state.calculated_markers_error = None
-                if not marker_groupby_calc:
-                    st.warning("Please select a 'Group By' variable.")
-                    st.session_state.calculated_markers_error = "No grouping variable selected."
-                else:
-                    with st.spinner(f"Calculating markers ({marker_method}, N={n_markers_calc}, GroupBy={marker_groupby_calc}, Use Raw={use_raw_markers})..."):
-                        try:
-                            # Call analysis function from the specific module
-                            top_markers_calculated = calculate_rank_genes_df(
-                                adata_vis, # Pass the main object, function handles raw access
-                                groupby_key=marker_groupby_calc,
-                                method=marker_method,
-                                #n_genes=n_markers_calc,
-                                use_raw=use_raw_markers
-                            )
-                            st.session_state.calculated_markers_result_df = top_markers_calculated # Store in state for display
-                            st.session_state.calculated_markers_params = { # Store params for context
-                                'groupby': marker_groupby_calc,
-                                'method': marker_method,
-                                'n_genes': n_markers_calc,
-                                'use_raw': use_raw_markers
-                            }
-                            #st.session_state.calculated_markers_error = None # Clear any previous error
-                            st.success("Marker calculation complete. Results displayed below.") # Add success message
-                        except (AnalysisError, FactorNotFoundError, ValueError, TypeError) as e:
-                            st.session_state.calculated_markers_error = f"Marker Calculation Error: {e}"
-                            logger.error(f"Marker calculation failed: {e}", exc_info=True)
-                        except Exception as e:
-                            st.session_state.calculated_markers_error = f"An unexpected error occurred during marker calculation: {e}"
-                            logger.error(f"Unexpected marker calc error: {e}", exc_info=True)
 
     # --- Pathway Analysis Tab ---
     with tab_gsea:
