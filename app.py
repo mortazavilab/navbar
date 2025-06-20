@@ -505,98 +505,6 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
     # --- Pathway Analysis Tab ---
     with tab_gsea:
         gsea_tab.render_gsea_tab()
-    # Pseudobulk PCA Calculation Form (remains in its tab)
-    with tab_pca:
-        st.subheader("Pseudobulk Principal Component Analysis (PCA)")
-        st.markdown("Aggregate data by selected groups, then perform PCA on the pseudobulk samples.")
-        
-        if "pca_form_submitted" in st.session_state and st.session_state.pca_form_submitted:
-            st.session_state.active_tab = "🔬 Pseudobulk PCA"
-            st.session_state.pca_form_submitted = False  # Reset the flag
-
-        with st.form("pca_form"):
-            # Grouping Vars (allow multiple)
-            pca_grouping_vars = st.multiselect(
-                "Group By for Aggregation:",
-                options=valid_obs_cat_cols,
-                key="pca_group_select_form",
-                help="Select one or more categorical variables to define the pseudobulk samples."
-            )
-
-            # Data Source Selection
-            pca_layer_key = st.selectbox(
-                "Data Source for Aggregation:",
-                options=dynamic_layer_options, # Use combined list
-                index=0, # Default to 'Auto-Select'
-                key="pca_layer_select_form",
-                help="Select the data matrix/layer to aggregate (typically 'sum' or 'mean') for PCA."
-            )
-
-            # Aggregation Function (optional, could default to sum or mean)
-            # pca_agg_func = st.selectbox("Aggregation Function:", options=['sum', 'mean'], index=0, key="pca_agg_func_form")
-            pca_agg_func = 'sum' # Defaulting to sum for count-based PCA
-
-            # Advanced Options Expander (inside the form)
-            st.checkbox("Show Advanced PCA Options", key="show_advanced_pca") # Use state key
-            n_hvgs_pca = N_HVG_PSEUDOBULK # Get defaults
-            n_comps_pca = DEFAULT_PCA_COMPONENTS
-            if st.session_state.show_advanced_pca:
-                with st.expander("Advanced Options"):
-                    # Ensure max_value for HVGs doesn't exceed available vars
-                    max_hvgs = adata_vis.n_vars if adata_vis else 10000 # Safe default if adata_vis not loaded
-                    n_hvgs_pca = st.number_input("Number of HVGs:", min_value=10, max_value=max_hvgs, value=min(N_HVG_PSEUDOBULK, max_hvgs), step=100, key="pca_hvg_n_form")
-                    n_comps_pca = st.number_input("Max PCA Components:", min_value=1, max_value=100, value=DEFAULT_PCA_COMPONENTS, key="pca_comps_n_form")
-
-            # Submit Button
-            run_pca_button = st.form_submit_button("Run Pseudobulk PCA")
-
-            if run_pca_button:
-                # Set active tab and update query parameter immediately
-                st.session_state.active_tab = "🔬 Pseudobulk PCA"
-                st.query_params["tab"] = "🔬 Pseudobulk PCA"
-
-                st.session_state.pca_adata_result = None # Clear previous results
-                st.session_state.pca_error = None
-                st.session_state.pca_grouping_vars_used = [] # Clear previous grouping vars
-                if not pca_grouping_vars:
-                    st.warning("Please select at least one grouping variable for PCA aggregation.")
-                    st.session_state.pca_error = "No grouping variables selected."
-                else:
-                    try:
-                        # Step 1: Aggregation (Cached)
-                        logger.info("Requesting Aggregation for PCA...")
-                        grouping_tuple = tuple(sorted(pca_grouping_vars)) # Use sorted tuple for cache key
-                        adata_agg_pca = cached_aggregate_adata(
-                            _adata_ref =adata_vis, # Use the visualization data
-                            _adata_ref_hash=get_adata_hash(adata_vis), # Pass hash for cache invalidation
-                            grouping_vars_tuple=grouping_tuple,
-                            selected_layer_key=pca_layer_key,
-                            agg_func=pca_agg_func # Use selected agg func
-                        )
-                        logger.info(f"Aggregation for PCA complete. Shape: {adata_agg_pca.shape}")
-
-                        # Step 2: PCA (using the function from pca_analysis.py)
-                        with st.spinner(f"Running PCA (HVGs={n_hvgs_pca}, Comps={n_comps_pca})..."):
-                            # Pass the result of aggregation to the PCA function
-                            adata_pca_result = preprocess_and_run_pca(
-                                adata_agg_pca, # Pass the actual aggregated data
-                                n_hvgs=n_hvgs_pca,
-                                n_comps=n_comps_pca
-                            )
-                        st.session_state.pca_adata_result = adata_pca_result # Store result in state
-                        # Store grouping vars used for this successful run for context in display tab
-                        st.session_state.pca_grouping_vars_used = pca_grouping_vars
-                        logger.info("PCA calculation complete.")
-                        st.success("PCA analysis complete. Results displayed below.") # Add success message
-
-                    except (AggregationError, AnalysisError, FactorNotFoundError, ValueError, TypeError) as e:
-                        st.session_state.pca_error = f"Pseudobulk PCA Error: {e}"
-                        logger.error(f"Pseudobulk PCA failed: {e}", exc_info=True)
-                    except Exception as e:
-                        st.session_state.pca_error = f"An unexpected error occurred during Pseudobulk PCA: {e}"
-                        logger.error(f"Unexpected Pseudobulk PCA error: {e}", exc_info=True)
-
-
     # Pseudobulk DEG Calculation Form (remains in its tab)
     with tab_deg:
         st.subheader("Pseudobulk Differential Expression (pyDESeq2)")
@@ -760,9 +668,9 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
 
     with tab_pca: # Pseudobulk PCA Display (Form is also here)
         pseudobulk_pca_tab.render_pseudobulk_pca_tab(
-            pca_result=st.session_state.get('pca_adata_result'),
-            # Pass grouping vars used in the last run (if successful) for context
-            pca_grouping_vars=st.session_state.get('pca_grouping_vars_used', [])
+        adata_vis=adata_vis,
+        valid_obs_cat_cols=valid_obs_cat_cols,
+        dynamic_layer_options=dynamic_layer_options
         )
 
     with tab_deg: # Pseudobulk DEG Display (Form is also here)
