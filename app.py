@@ -442,147 +442,9 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
 
     # --- Analysis Execution Forms (Placed within relevant tab context) ---
 
-    # --- Pathway Analysis Tab ---
-    with tab_gsea:
-        gsea_tab.render_gsea_tab()
-    # Pseudobulk DEG Calculation Form (remains in its tab)
-    with tab_deg:
-        st.subheader("Pseudobulk Differential Expression (pyDESeq2)")
-        if not PYDESEQ2_INSTALLED:
-            st.warning("`pydeseq2` library not installed. DEG analysis is unavailable. Please install it (`pip install pydeseq2`) and restart.", icon="⚠️")
-        else:
-            st.markdown("Aggregate counts by selected factors, then run DESeq2 to find DE genes between two complex groups.")
-            with st.form("deg_form"):
-                st.markdown("**1. Define Factors & Data Source**")
-                deg_comparison_factors = st.multiselect(
-                    "Comparison Factors:", options=valid_obs_cat_cols, key="deg_comparison_select_form",
-                    help="Select variables defining the comparison groups (e.g., [treatment, cell_type]). Order matters for group definition."
-                )
-                deg_replicate_factor = st.selectbox(
-                    "Replicate Factor (Optional):", options=[None] + valid_obs_cat_cols, key="deg_replicate_select_form",
-                    help="Select variable identifying replicates (e.g., patient_id)."
-                )
-                # Automatically suggest 'counts' layer if it exists
-                default_deg_layer_idx = 0
-                if 'counts' in dynamic_layer_options: default_deg_layer_idx = dynamic_layer_options.index('counts')
-                elif 'Auto-Select' in dynamic_layer_options: default_deg_layer_idx = dynamic_layer_options.index('Auto-Select')
-
-                deg_layer_key = st.selectbox(
-                    "Data Source for Aggregation (Counts):", options=dynamic_layer_options, index=default_deg_layer_idx, key="deg_layer_select_form",
-                    help="Select matrix/layer with raw counts for DESeq2 (aggregation by sum)."
-                )
-
-                st.markdown("**2. Define Comparison Groups**")
-                group1_levels = OrderedDict()
-                group2_levels = OrderedDict()
-                deg_form_valid = bool(deg_comparison_factors) # Initial validation
-
-                if deg_comparison_factors:
-                    col_g1, col_g2 = st.columns(2)
-                    # Dynamically create selectors based on chosen factors
-                    with col_g1:
-                        st.markdown("**Group 1 (Numerator)**")
-                        for factor in deg_comparison_factors:
-                            unique_levels = []
-                            try:
-                                # Ensure factor exists before accessing
-                                if factor not in adata_vis.obs.columns:
-                                    raise ValueError(f"Factor '{factor}' not found in columns.")
-                                unique_levels = adata_vis.obs[factor].astype('category').cat.categories.tolist()
-                                if not unique_levels: raise ValueError("No levels found.")
-                            except Exception as e:
-                                st.warning(f"Could not get levels for factor '{factor}': {e}", icon="⚠️")
-                                deg_form_valid = False # Invalidate form if levels can't be retrieved
-                            if unique_levels:
-                                group1_levels[factor] = st.selectbox(f"Level for '{factor}' (G1):", options=unique_levels, key=f"deg_g1_{factor}")
-
-                    with col_g2:
-                        st.markdown("**Group 2 (Denominator / Base)**")
-                        for factor in deg_comparison_factors:
-                            unique_levels = []
-                            try:
-                                if factor not in adata_vis.obs.columns:
-                                    raise ValueError(f"Factor '{factor}' not found in columns.")
-                                unique_levels = adata_vis.obs[factor].astype('category').cat.categories.tolist()
-                                if not unique_levels: raise ValueError("No levels found.")
-                            except Exception as e:
-                                st.warning(f"Could not get levels for factor '{factor}': {e}", icon="⚠️")
-                                deg_form_valid = False
-                            if unique_levels:
-                                # Default second group to second level if available, else first
-                                default_idx_g2 = 1 if len(unique_levels) > 1 else 0
-                                group2_levels[factor] = st.selectbox(f"Level for '{factor}' (G2):", options=unique_levels, key=f"deg_g2_{factor}", index=default_idx_g2)
-
-                    # Check if groups are identical only if form is still valid
-                    is_identical = False
-                    if deg_form_valid and len(group1_levels) == len(deg_comparison_factors) and len(group2_levels) == len(deg_comparison_factors):
-                        is_identical = (group1_levels == group2_levels)
-                        if is_identical:
-                            st.warning("Group 1 and Group 2 definitions are identical.", icon="⚠️")
-                            deg_form_valid = False
-                else:
-                    st.info("Select Comparison Factors above to define groups.")
-                    deg_form_valid = False
-
-
-                st.markdown("**3. Run Analysis**")
-                st.checkbox("Show Advanced DEG Options", key="show_advanced_deg") # State key
-                min_sum_filter = MIN_DESEQ_COUNT_SUM # Default
-                if st.session_state.show_advanced_deg:
-                    with st.expander("Advanced Options"):
-                        min_sum_filter = st.number_input("Min Gene Count Sum Filter:", min_value=0, value=MIN_DESEQ_COUNT_SUM, step=5, key="deg_min_count_form", help="Filter genes with total count across pseudobulk samples < this value.")
-
-                # Enable button only if factors selected, levels retrieved, and groups different
-                run_deg_button = st.form_submit_button("Run Pseudobulk DEG", disabled=not deg_form_valid)
-
-                if run_deg_button:
-                    st.session_state.active_tab = "🧪 Pseudobulk DEG"
-                    st.session_state.deg_results_df = None # Clear previous results
-                    st.session_state.deg_error = None
-                    st.session_state.deg_params_display = None # Clear previous params
-
-                    try:
-                        # Step 1: Aggregation (Sum - Cached)
-                        deg_aggregation_keys = sorted(list(set(deg_comparison_factors + ([deg_replicate_factor] if deg_replicate_factor else []))))
-                        logger.info(f"Requesting Aggregation for DEG by keys: {deg_aggregation_keys}")
-                        agg_keys_tuple = tuple(deg_aggregation_keys)
-                        adata_agg_deg = cached_aggregate_adata(
-                            _adata_ref=adata_vis,
-                            _adata_ref_hash=adata_vis_hash, # Pass hash for cache invalidation
-                            grouping_vars_tuple=agg_keys_tuple,
-                            selected_layer_key=deg_layer_key,
-                            agg_func='sum' # MUST be sum for DESeq2 counts
-                        )
-                        logger.info(f"Aggregation for DEG complete. Shape: {adata_agg_deg.shape}")
-
-
-                        # Step 2: Run DESeq2 (using function from deg_analysis.py)
-                        with st.spinner("Running pyDESeq2..."):
-                            deg_results_df = prepare_metadata_and_run_deseq(
-                                adata_agg_deg, # Pass the actual aggregated data
-                                comparison_factors=deg_comparison_factors, # Pass as list
-                                replicate_factor=deg_replicate_factor,
-                                group1_levels=group1_levels, # Pass OrderedDict
-                                group2_levels=group2_levels, # Pass OrderedDict
-                                min_count_sum_filter=min_sum_filter,
-                                min_nonzero_samples=min_nonzero_samples
-                            )
-                        st.session_state.deg_results_df = deg_results_df # Store result
-                        # Store params used for this successful run for display context
-                        st.session_state.deg_params_display = {'group1': group1_levels, 'group2': group2_levels}
-                        logger.info(f"pyDESeq2 analysis complete. Found {len(deg_results_df) if deg_results_df is not None else 0} genes.")
-                        st.success("DEG analysis complete. Results displayed below.") # Add success message
-
-                    except (AggregationError, AnalysisError, FactorNotFoundError, ValueError, ImportError, TypeError) as e:
-                        st.session_state.deg_error = f"Pseudobulk DEG Error: {e}"
-                        logger.error(f"Pseudobulk DEG failed: {e}", exc_info=True)
-                    except Exception as e:
-                        st.session_state.deg_error = f"An unexpected error occurred during Pseudobulk DEG: {e}"
-                        logger.error(f"Unexpected Pseudobulk DEG error: {e}", exc_info=True)
-
-
-    # --- Render Tabs using Imported Functions ---
-    with tab_summary: # New Tab Rendering
+    # -- Render Tabs using Imported Functions ---
+    #--- Pathway Analysis Tab ---
+    with tab_summary: 
         summary_tab.render_summary_tab(adata_vis)
 
     with tab_embedding: # Embedding Plot
@@ -605,27 +467,23 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
             valid_obs_cat_cols=valid_obs_cat_cols,
             selected_color_var=st.session_state.sidebar_selection_color # Pass sidebar selection for context
         )
+    
+    with tab_gsea:
+        gsea_tab.render_gsea_tab()
 
     with tab_pca: # Pseudobulk PCA Display (Form is also here)
         pseudobulk_pca_tab.render_pseudobulk_pca_tab(
-        adata_vis=adata_vis,
-        valid_obs_cat_cols=valid_obs_cat_cols,
-        dynamic_layer_options=dynamic_layer_options
+            adata_vis=adata_vis,
+            valid_obs_cat_cols=valid_obs_cat_cols,
+            dynamic_layer_options=dynamic_layer_options
         )
 
     with tab_deg: # Pseudobulk DEG Display (Form is also here)
-        if PYDESEQ2_INSTALLED:
-            # Corrected State Retrieval for DEG Params
-            stored_params = st.session_state.get('deg_params_display')
-            default_params = {'group1': OrderedDict(), 'group2': OrderedDict()}
-            deg_params = stored_params if stored_params is not None else default_params
-
-            pseudobulk_deg_tab.render_pseudobulk_deg_tab(
-                deg_results=st.session_state.get('deg_results_df'),
-                group1_levels=deg_params['group1'], # Now deg_params is guaranteed to be a dict
-                group2_levels=deg_params['group2']
-            )
-        # Else: the warning is displayed within the form area above
+        pseudobulk_deg_tab.render_pseudobulk_deg_tab(
+            adata_vis=adata_vis,
+            valid_obs_cat_cols=valid_obs_cat_cols,
+            dynamic_layer_options=dynamic_layer_options
+        )
 
 
 # --- Footer or Initial Prompt ---

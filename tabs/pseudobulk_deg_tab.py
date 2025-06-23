@@ -1,108 +1,222 @@
-# scanpy_viewer/tabs/pseudobulk_deg_tab.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
-from collections import OrderedDict # Keep for type hint maybe
-from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
-from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
-# Check if pyDESeq2 is installed via the analysis module's flag
-from analysis.deg_analysis import PYDESEQ2_INSTALLED
+from collections import OrderedDict
+import anndata as ad
+
+from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError, get_adata_hash
+from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI, MIN_DESEQ_COUNT_SUM
+from analysis.deg_analysis import PYDESEQ2_INSTALLED, prepare_metadata_and_run_deseq
+from aggregation import cached_aggregate_adata
+from utils import AggregationError, AnalysisError, FactorNotFoundError
 
 logger = logging.getLogger(__name__)
 
-def render_pseudobulk_deg_tab(deg_results, group1_levels, group2_levels):
-    """Renders the content for the Pseudobulk DEG tab AFTER calculation."""
-
+def render_pseudobulk_deg_tab(adata_vis, valid_obs_cat_cols, dynamic_layer_options):
+    st.subheader("Pseudobulk Differential Expression (pyDESeq2)")
+    
     if not PYDESEQ2_INSTALLED:
-        # This message should ideally be shown near the run button,
-        # but double-check here in case state is inconsistent.
-        st.warning("`pydeseq2` library not installed. DEG analysis is unavailable.", icon="⚠️")
+        st.warning("`pydeseq2` is not installed. Please `pip install pydeseq2`.")
+        return
+    
+    if not isinstance(adata_vis, ad.AnnData):
+        st.error("Invalid data provided to DEG tab.")
+        return
+    if not valid_obs_cat_cols:
+        st.warning("No suitable categorical columns found in `adata.obs` for grouping.")
         return
 
-    st.markdown("---") # Separator from the form above
+    adata_vis_hash = get_adata_hash(adata_vis)
+    st.markdown("**1. Define Analysis Factors**")
+
+    # Replicate = sample-level
+    deg_replicate_factor = st.selectbox(
+        "Replicate Factor (required):", options=valid_obs_cat_cols, key="deg_replicate_select_form",
+        help="Variable identifying replicates (e.g., sample or mouse id)."
+    )
+    # Comparison is typically genotype (or condition)
+    deg_comparison_factor = st.selectbox(
+        "Comparison Factor (required):", options=[c for c in valid_obs_cat_cols if c != deg_replicate_factor],
+        key="deg_comparison_factor_form",
+        help="Variable defining the comparison groups (e.g., genotype, treatment)."
+    )
+    # Cell type for which to run DE (do per type)
+    deg_celltype_factor = st.selectbox(
+        "Cell Type Factor (e.g. celltype or general_celltype)", options=[c for c in valid_obs_cat_cols if c not in (deg_replicate_factor, deg_comparison_factor)],
+        key="deg_celltype_factor_form"
+    )
+    selected_celltype_level = st.selectbox(
+        "Choose celltype for analysis:", options=adata_vis.obs[deg_celltype_factor].dropna().unique().tolist(),
+        key="deg_celltype_level_form"
+    )
+    # Counts data layer
+    default_deg_layer_idx = 0
+    for layername in ['cellbender_counts', 'raw_counts', 'counts', 'Auto-Select']:
+        if layername in dynamic_layer_options:
+            default_deg_layer_idx = dynamic_layer_options.index(layername)
+            break
+    deg_layer_key = st.selectbox(
+        "Data Source for Aggregation (Counts):", options=dynamic_layer_options,
+        index=default_deg_layer_idx, key="deg_layer_select_form",
+        help="Select matrix/layer with raw counts for DESeq2 (aggregation by sum)."
+    )
+
+    # Step 2: DEG Calculation form
+    with st.form("deg_form"):
+        st.markdown("**2. Select Comparison Groups**")
+        group1_level = st.selectbox(
+            f"{deg_comparison_factor} group 1:", options=sorted(adata_vis.obs[deg_comparison_factor].dropna().unique().astype(str)),
+            key="deg_g1_level"
+        )
+        group2_level = st.selectbox(
+            f"{deg_comparison_factor} group 2:", options=sorted(adata_vis.obs[deg_comparison_factor].dropna().unique().astype(str)),
+            key="deg_g2_level"
+        )
+        # Validation
+        deg_form_valid = (group1_level != group2_level)
+        if not deg_form_valid:
+            st.warning("Group 1 and Group 2 must differ.")
+
+        st.checkbox("Show Advanced DEG Options", key="show_advanced_deg") # State key
+        min_sum_filter = MIN_DESEQ_COUNT_SUM # Default
+        min_nonzero_samples = 2 # Default
+        
+        if st.session_state.get("show_advanced_deg"):
+            with st.expander("Advanced Options"):
+                min_sum_filter = st.number_input(
+                    "Min Gene Count Sum Filter:", min_value=0, value=MIN_DESEQ_COUNT_SUM, 
+                    step=5, key="deg_min_count_form",
+                    help="Filter genes with total count across pseudobulk samples < this value."
+                )
+                min_nonzero_samples = st.number_input(
+                    "Min Non-zero Samples:", min_value=1, value=2,
+                    step=1, key="deg_min_nonzero_form",
+                    help="Minimum number of samples that must have non-zero counts for a gene."
+                )
+
+        #run_deg_button = st.form_submit_button("Run Pseudobulk DEG", disabled=not deg_form_valid)
+        run_deg_button = st.form_submit_button("Run Pseudobulk DEG")
+
+        if run_deg_button:
+            st.session_state.deg_results_df = None
+            st.session_state.deg_error = None
+            st.session_state.deg_params_display = None
+
+            try:
+                # 1. SUBSET TO THE CELL TYPE OF INTEREST **BEFORE AGGREGATION**
+                celltype_mask = (adata_vis.obs[deg_celltype_factor].astype(str) == str(selected_celltype_level))
+                adata_celltype = adata_vis[celltype_mask].copy()
+                # AGGREGATE BY [replicate]
+                deg_aggregation_keys = [deg_replicate_factor]
+                agg_keys_tuple = tuple(deg_aggregation_keys)
+                logger.info(f"Requesting Aggregation for DEG by keys: {agg_keys_tuple}")
+
+                with st.spinner("Aggregating data..."):
+                    adata_agg_deg = cached_aggregate_adata(
+                        _adata_ref=adata_celltype,
+                        _adata_ref_hash=adata_vis_hash, # Technically, the mask makes cache less useful
+                        grouping_vars_tuple=agg_keys_tuple,
+                        selected_layer_key=deg_layer_key,
+                        agg_func='sum'
+                    )
+                logger.info(f"Aggregation complete. Shape: {adata_agg_deg.shape}")
+
+                # RE-ATTACH COMPARISON FACTOR (genotype etc.) to new aggregated .obs using replicate
+                meta_cols = [deg_replicate_factor, deg_comparison_factor]
+                sample_meta = (adata_vis.obs[meta_cols]
+                               .drop_duplicates(subset=deg_replicate_factor)
+                               .set_index(deg_replicate_factor))
+                adata_agg_deg.obs = (
+                    adata_agg_deg.obs.join(sample_meta, on=deg_replicate_factor, rsuffix='_meta')
+                )
+                if adata_agg_deg.obs[deg_comparison_factor].isnull().any():
+                    st.warning("Some pseudobulk samples could not be assigned to a comparison group! Check your metadata.")
+
+                # Prepare group1/group2 levels config for DESeq2
+                group1_levels = OrderedDict({deg_comparison_factor: group1_level})
+                group2_levels = OrderedDict({deg_comparison_factor: group2_level})
+                deg_comparison_factors = [deg_comparison_factor]
+
+                # Step 2: Run DESeq2
+                with st.spinner("Running pyDESeq2..."):
+                    deg_results_df = prepare_metadata_and_run_deseq(
+                        adata_agg_deg,
+                        comparison_factors=deg_comparison_factors,
+                        replicate_factor=deg_replicate_factor,
+                        group1_levels=group1_levels,
+                        group2_levels=group2_levels,
+                        min_count_sum_filter=min_sum_filter,
+                        min_nonzero_samples=min_nonzero_samples
+                    )
+                st.session_state.deg_results_df = deg_results_df
+                st.session_state.deg_params_display = {
+                    'group1': group1_levels,
+                    'group2': group2_levels,
+                    'celltype': selected_celltype_level
+                }
+                logger.info(f"DESeq2 analysis complete. {len(deg_results_df) if deg_results_df is not None else 0} genes.")
+                st.success("DEG analysis complete. Results below.")
+
+            except (AggregationError, AnalysisError, FactorNotFoundError, ValueError, ImportError, TypeError) as e:
+                st.session_state.deg_error = f"Pseudobulk DEG Error: {e}"
+                logger.error(f"Pseudobulk DEG failed: {e}", exc_info=True)
+            except Exception as e:
+                st.session_state.deg_error = f"An unexpected error occurred during Pseudobulk DEG: {e}"
+                logger.error(f"Unexpected Pseudobulk DEG error: {e}", exc_info=True)
+
+    _render_deg_results()
+
+def _render_deg_results():
+    st.markdown("---")
     st.markdown("#### DEG Results (pyDESeq2)")
 
-    # Handle case where DEG run failed
+    deg_results = st.session_state.get('deg_results_df')
+    stored_params = st.session_state.get('deg_params_display')
+    default_params = {'group1': OrderedDict(), 'group2': OrderedDict()}
+    deg_params = stored_params if stored_params is not None else default_params
+    group1_levels = deg_params['group1']
+    group2_levels = deg_params['group2']
+
     if deg_results is None:
         if st.session_state.get('deg_error'):
             st.error(f"Pseudobulk DEG Error: {st.session_state.deg_error}")
         else:
-            st.info("Run Pseudobulk DEG using the button above to see results here.")
+            st.info("Run Pseudobulk DEG using the form above to see results here.")
         return
-
-    # Handle case where DEG ran but produced no results
     if not isinstance(deg_results, pd.DataFrame):
-         st.error(f"Internal Error: DEG results are not a DataFrame (type: {type(deg_results)}).")
-         return
+        st.error(f"Internal Error: DEG results are not a DataFrame (type: {type(deg_results)}).")
+        return
     if deg_results.empty:
-        st.warning("DEG analysis ran but produced no results (empty table). This might happen if no genes passed filtering or if the contrast was invalid.")
+        st.warning("No DEGs found.")
         return
 
-    # --- Display Summary Stats ---
-    try:
-        padj_threshold = 0.05 # Standard threshold
-        if 'padj' not in deg_results.columns:
-             raise KeyError("'padj' column not found in DEG results.")
-        if 'log2FoldChange' not in deg_results.columns:
-             raise KeyError("'log2FoldChange' column not found in DEG results.")
+    padj_threshold = 0.05
+    if 'padj' in deg_results.columns and 'log2FoldChange' in deg_results.columns:
+        n_sig = (deg_results['padj'] < padj_threshold).sum()
+        n_tested = len(deg_results)
+        st.metric(f"Significant Genes (padj < {padj_threshold})", f"{n_sig} / {n_tested}")
+    else:
+        st.warning("Missing padj/log2FoldChange for summary stats.")
 
-        n_genes_tested = deg_results.shape[0]
-        # Handle potential NaNs in padj before comparison
-        sig_mask = deg_results['padj'].notna() & (deg_results['padj'] < padj_threshold)
-        n_sig = sig_mask.sum()
+    group1_desc = ", ".join([f"{k}={v}" for k, v in group1_levels.items()])
+    group2_desc = ", ".join([f"{k}={v}" for k, v in group2_levels.items()])
+    st.caption(f"**Group 1 (Numerator):** {group1_desc}")
+    st.caption(f"**Group 2 (Denominator):** {group2_desc}")
 
-        lfc_threshold_up = 0 # Basic threshold for up/down - could be configurable
-        lfc_threshold_down = 0
-
-        # Handle potential NaNs in LFC
-        lfc_notna_mask = deg_results['log2FoldChange'].notna()
-        up_mask = sig_mask & lfc_notna_mask & (deg_results['log2FoldChange'] > lfc_threshold_up)
-        down_mask = sig_mask & lfc_notna_mask & (deg_results['log2FoldChange'] < lfc_threshold_down)
-        n_up = up_mask.sum()
-        n_down = down_mask.sum()
-
-        st.metric(f"Significant Genes (padj < {padj_threshold})", f"{n_sig} / {n_genes_tested}")
-
-        # Display compared groups clearly
-        group1_desc = ", ".join([f"{k}={v}" for k, v in group1_levels.items()])
-        group2_desc = ", ".join([f"{k}={v}" for k, v in group2_levels.items()])
-        st.caption(f"**Group 1 (Numerator):** {group1_desc}")
-        st.caption(f"**Group 2 (Denominator):** {group2_desc}")
-
-        st.write(f"Up-regulated in Group 1 vs Group 2 (LFC > {lfc_threshold_up}): **{n_up}**")
-        st.write(f"Down-regulated in Group 1 vs Group 2 (LFC < {lfc_threshold_down}): **{n_down}**")
-
-
-    except KeyError as e:
-        st.warning(f"Could not calculate summary statistics - results table might be missing column: {e}")
-        logger.warning(f"DEG summary stats failed due to missing column: {e}")
-    except Exception as e:
-        st.warning(f"Could not calculate summary statistics due to error: {e}")
-        logger.warning(f"DEG summary stats failed: {e}", exc_info=True)
-
-    # --- Display Results Table ---
     st.dataframe(deg_results)
 
-    # Download Results Table
+    # Download
     try:
         csv_bytes = deg_results.to_csv().encode('utf-8')
-        fname_base = "pseudobulk_deg_results_G1vG2" # Basic name
+        fname_base = "pseudobulk_deg_results"
         fname_csv = sanitize_filename(fname_base, extension="csv")
-        generate_download_button(
-            csv_bytes,
-            filename=fname_csv,
-            label="Download Results Table (CSV)",
-            mime="text/csv",
-            key="download_deg_results_csv"
-        )
+        generate_download_button(csv_bytes, filename=fname_csv, label="Download Results Table (CSV)",
+                                mime="text/csv", key="download_deg_results_csv")
     except Exception as e:
         st.error(f"Failed to prepare results table for download: {e}")
-        logger.error(f"DEG results CSV download prep failed: {e}", exc_info=True)
-
-
+    
     # --- Volcano Plot ---
     with st.expander("Volcano Plot"):
         required_cols_volcano = ['log2FoldChange', 'padj']
@@ -134,7 +248,6 @@ def render_pseudobulk_deg_tab(deg_results, group1_levels, group2_levels):
                     max_log_val = max(max_log_val, 10) # Ensure cap is at least 10
                     plot_df['-log10padj'] = plot_df['-log10padj'].clip(upper=max_log_val)
 
-
                     # Basic volcano plot - all points
                     ax_volcano.scatter(
                         plot_df['log2FoldChange'],
@@ -143,6 +256,7 @@ def render_pseudobulk_deg_tab(deg_results, group1_levels, group2_levels):
                     )
 
                     # Highlight significant points (padj < threshold)
+                    padj_threshold = 0.05
                     sig_df = plot_df[plot_df['padj'] < padj_threshold]
                     ax_volcano.scatter(
                         sig_df['log2FoldChange'],

@@ -1,4 +1,4 @@
-# scanpy_viewer/aggregation.py
+# navbar/aggregation.py
 
 import scanpy as sc
 import anndata as ad
@@ -322,9 +322,50 @@ def aggregate_adata(adata_ref, grouping_vars, selected_layer_key, agg_func='sum'
             logger.error(f"Failed to copy index to obs after aggregation: {e}")
             raise AggregationError(f"Failed post-aggregation index processing: {e}") from e
 
+        # --- Aggregation Result Summary ---
+        summary_lines = []
+
+        summary_lines.append("\n--- Aggregation Summary ---")
+        summary_lines.append(f"Grouping variables used: {grouping_vars}")
+        summary_lines.append(f"Number of groups (rows) in output AnnData: {adata_agg.n_obs}")
+        summary_lines.append(f"Number of features (columns): {adata_agg.n_vars}")
+
+        for var in grouping_vars:
+            if var in adata_agg.obs.columns:
+                levels = adata_agg.obs[var].unique()
+                summary_lines.append(f"- '{var}': {len(levels)} unique levels: {levels[:10]}{' ...' if len(levels)>10 else ''}")
+                value_counts = adata_agg.obs[var].value_counts()
+                summary_lines.append(f"  Top level counts: {value_counts.head(5).to_dict()}")
+            else:
+                summary_lines.append(f"- [WARNING] Grouping variable '{var}' not in output .obs")
+
+        # Check for missing/NaN values in output .obs
+        n_nans = adata_agg.obs[grouping_vars].isnull().sum().sum()
+        if n_nans > 0:
+            summary_lines.append(f"[WARNING] There are {n_nans} missing (NaN) values in grouping columns after aggregation.")
+
+        # Check for duplicated obs_names (should not happen)
+        if adata_agg.obs.index.duplicated().any():
+            summary_lines.append("[WARNING] There are duplicated group indices in output .obs.index!")
+
+        # Show the first 3 groups as a quick preview
+        summary_lines.append("First 3 aggregated groups (index and grouping vars):")
+        summary_lines.append(f"\n{adata_agg.obs[grouping_vars].head(3)}\n")
+
+        summary_msg = "\n".join(summary_lines)
+        logger.info(summary_msg)
+
+        # Optional: if running in Streamlit, show in app as well
+        try:
+            st.markdown("#### Aggregation Summary (Debug)")
+            for l in summary_lines:
+                st.write(l)
+        except Exception:
+            pass  # If not in Streamlit, just skip
+
         logger.info("Aggregation and index processing complete.")
         return adata_agg # Return the processed aggregated AnnData object
-
+        
     except ValueError as ve:
         # Check for common pandas/numpy aggregation errors
         err_str = str(ve).lower()
