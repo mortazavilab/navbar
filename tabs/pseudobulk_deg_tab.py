@@ -34,22 +34,26 @@ def render_pseudobulk_deg_tab(adata_vis, valid_obs_cat_cols, dynamic_layer_optio
     # Replicate = sample-level
     deg_replicate_factor = st.selectbox(
         "Replicate Factor (required):", options=valid_obs_cat_cols, key="deg_replicate_select_form",
-        help="Variable identifying replicates (e.g., sample or mouse id)."
+        help="Variable identifying replicates (e.g., sample or mouse id).",
+        width=500
     )
     # Comparison is typically genotype (or condition)
     deg_comparison_factor = st.selectbox(
         "Comparison Factor (required):", options=[c for c in valid_obs_cat_cols if c != deg_replicate_factor],
         key="deg_comparison_factor_form",
-        help="Variable defining the comparison groups (e.g., genotype, treatment)."
+        help="Variable defining the comparison groups (e.g., genotype, treatment).",
+        width=500
     )
     # Cell type for which to run DE (do per type)
     deg_celltype_factor = st.selectbox(
         "Cell Type Factor (e.g. celltype or general_celltype)", options=[c for c in valid_obs_cat_cols if c not in (deg_replicate_factor, deg_comparison_factor)],
-        key="deg_celltype_factor_form"
+        key="deg_celltype_factor_form",
+        width=500
     )
     selected_celltype_level = st.selectbox(
         "Choose celltype for analysis:", options=adata_vis.obs[deg_celltype_factor].dropna().unique().tolist(),
-        key="deg_celltype_level_form"
+        key="deg_celltype_level_form",
+        width=500
     )
     # Counts data layer
     default_deg_layer_idx = 0
@@ -60,24 +64,27 @@ def render_pseudobulk_deg_tab(adata_vis, valid_obs_cat_cols, dynamic_layer_optio
     deg_layer_key = st.selectbox(
         "Data Source for Aggregation (Counts):", options=dynamic_layer_options,
         index=default_deg_layer_idx, key="deg_layer_select_form",
-        help="Select matrix/layer with raw counts for DESeq2 (aggregation by sum)."
+        help="Select matrix/layer with raw counts for DESeq2 (aggregation by sum).",
+        width=500
     )
 
     # Step 2: DEG Calculation form
-    with st.form("deg_form"):
-        st.markdown("**2. Select Comparison Groups**")
+    with st.form("deg_form", width=600):
+        st.markdown("**2. Select Comparison Groups**", width=450)
         group1_level = st.selectbox(
             f"{deg_comparison_factor} group 1:", options=sorted(adata_vis.obs[deg_comparison_factor].dropna().unique().astype(str)),
-            key="deg_g1_level"
+            key="deg_g1_level",
+            width=400
         )
         group2_level = st.selectbox(
             f"{deg_comparison_factor} group 2:", options=sorted(adata_vis.obs[deg_comparison_factor].dropna().unique().astype(str)),
-            key="deg_g2_level"
+            key="deg_g2_level",
+            width=400
         )
         # Validation
         deg_form_valid = (group1_level != group2_level)
         if not deg_form_valid:
-            st.warning("Group 1 and Group 2 must differ.")
+            st.warning("Group 1 and Group 2 must differ.", width=450)
 
         st.checkbox("Show Advanced DEG Options", key="show_advanced_deg") # State key
         min_sum_filter = MIN_DESEQ_COUNT_SUM # Default
@@ -205,7 +212,19 @@ def _render_deg_results():
     st.caption(f"**Group 1 (Numerator):** {group1_desc}")
     st.caption(f"**Group 2 (Denominator):** {group2_desc}")
 
-    st.dataframe(deg_results)
+    column_config = {
+    "pvalue": st.column_config.NumberColumn(
+        "P-value (Scientific Notation)",
+        help="Large numbers displayed in scientific notation",
+        format="scientific", # Set the format to scientific notation
+        ),
+    "padj": st.column_config.NumberColumn(
+        "Adjusted P-value (padj)",
+        help="Adjusted p-value after multiple testing correction",
+        format="scientific", # Set the format to scientific notation
+        )
+    }
+    st.dataframe(deg_results, column_config=column_config)
 
     # Download
     try:
