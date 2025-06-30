@@ -51,8 +51,8 @@ def run_gsea_prerank(
     selected_group: str,
     gene_sets: str,
     ranking_metric: str = RANK_SCORE_COL,
-    min_size: int = 15,
-    max_size: int = 500,
+    min_size: int = 5,
+    max_size: int = 15000,
     permutation_num: int = 100, # Keep low for speed in interactive app
     seed: int = 42,
     threads: int = 1

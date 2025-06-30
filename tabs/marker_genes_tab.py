@@ -83,6 +83,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                  min(DEFAULT_N_MARKERS_DISPLAY, max_genes_available_pre), key="n_markers_pre_display_slider",
                  help="Select N top markers (by score) per group for table and plot."
             )
+            st.session_state.n_top_markers_for_gsea = n_markers_pre_display
 
             logger.debug(f"Filtering precomputed table to top {n_markers_pre_display} markers per group.")
             precomputed_markers_df_display = precomputed_markers_df_full.groupby('group').head(n_markers_pre_display).reset_index(drop=True)
@@ -239,6 +240,7 @@ def render_marker_genes_tab(adata_vis, adata_full, valid_obs_cat_cols, selected_
                  min(DEFAULT_N_MARKERS_DISPLAY, max_genes_available_calc), key="n_markers_calc_display_slider",
                  help="Select N top markers (by score) per group for table and plot."
             )
+            st.session_state.n_top_markers_for_gsea = n_markers_calc_display
 
             logger.debug(f"Filtering calculated table to top {n_markers_calc_display} markers per group.")
             calculated_markers_df_display = calculated_markers_df_full.groupby('group').head(n_markers_calc_display).reset_index(drop=True)

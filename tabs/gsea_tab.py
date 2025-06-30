@@ -53,17 +53,18 @@ def render_gsea_tab():
         )
 
         # Select gene set library
-        gsea_gene_sets = st.selectbox(
-            "Select Gene Set Library:",
+        gsea_gene_sets = st.multiselect(
+            "Select Gene Set Libraries:",
             options=AVAILABLE_GENE_SETS,
-            key="gsea_library_select_form",
-            help="Choose the gene set database (e.g., KEGG, GO) for enrichment analysis. Requires internet connection on first use for some libraries."
+            default=["GO_Biological_Process_2025"],  # Default selection
+            key="gsea_library_multiselect_form",
+            help="Choose one or more gene set databases (e.g., KEGG, GO) for enrichment analysis."
         )
 
         # Advanced Options (Optional)
         st.checkbox("Show Advanced GSEA Options", key="show_advanced_gsea")
-        gsea_min_size = 15
-        gsea_max_size = 500
+        gsea_min_size = 5
+        gsea_max_size = 15000
         gsea_permutations = 100  # Keep low for web app speed
         gsea_ranking_metric = marker_params.get('ranking_metric', RANK_SCORE_COL)  # Use default from markers calc
 
@@ -91,19 +92,30 @@ def render_gsea_tab():
                     key="gsea_perms", 
                     help="Higher numbers increase runtime but improve p-value accuracy."
                 )
+        top_n_default = int(st.session_state.get("n_top_markers_for_gsea", 10))
+        max_possible_n = 300
+        gsea_n_top_markers = st.number_input(
+            "Number of Top Markers to Use for GSEA:",
+            min_value=5,
+            max_value=max_possible_n,
+            value=top_n_default,
+            step=1,
+            key="gsea_n_top_markers",
+            help=f"Select the number of top markers to use for GSEA. Maximum is {max_possible_n}."
+        )   
 
         # Submit Button
         run_gsea_button = st.form_submit_button("Run Pathway Analysis")
 
         if run_gsea_button:
             st.session_state.active_tab = "📊 Pathway Analysis"
-            st.session_state.gsea_results_df = None  # Clear previous results
+            st.session_state.gsea_results_dict = {}
             st.session_state.gsea_error = None
 
             if not gsea_selected_group:
                 st.warning("Please select a Group/Cluster to analyze.")
                 st.session_state.gsea_error = "No group selected."
-            elif not gsea_gene_sets or "not installed" in gsea_gene_sets or "Error fetching" in gsea_gene_sets:
+            elif not gsea_gene_sets:
                 st.warning("Please select a valid Gene Set Library.")
                 st.session_state.gsea_error = "Invalid or unavailable gene set library selected."
             else:
@@ -111,20 +123,36 @@ def render_gsea_tab():
                     try:
                         # Get hash of marker df for caching
                         marker_df = st.session_state.calculated_markers_result_df
-                        marker_df_hash_val = get_adata_hash(marker_df) if marker_df is not None else "no_markers"
+                        ranking_metric = gsea_ranking_metric
+                        n_top_markers = int(gsea_n_top_markers)
 
-                        # Call analysis function
-                        gsea_results = run_gsea_prerank(
-                            _marker_results_df_ref=marker_df,
-                            marker_df_hash=marker_df_hash_val,
-                            selected_group=gsea_selected_group,
-                            gene_sets=gsea_gene_sets,
-                            ranking_metric=gsea_ranking_metric,
-                            min_size=gsea_min_size,
-                            max_size=gsea_max_size,
-                            permutation_num=gsea_permutations
-                        )
-                        st.session_state.gsea_results_df = gsea_results
+                        # Filter to the selected group and top N by metric
+                        group_mask = marker_df[RANK_GROUP_COL] == gsea_selected_group
+                        marker_df_group = marker_df[group_mask].copy()
+                        marker_df_group = marker_df_group.sort_values(by=ranking_metric, ascending=False).head(n_top_markers)
+                        marker_df_hash_val = get_adata_hash(marker_df_group) if marker_df_group is not None else "no_markers"
+
+                        gsea_results_dict = {}
+                        for gene_set in gsea_gene_sets:
+                            try:
+                                gsea_results = run_gsea_prerank(
+                                _marker_results_df_ref=marker_df_group,
+                                marker_df_hash=marker_df_hash_val,
+                                selected_group=gsea_selected_group,
+                                gene_sets=gene_set,
+                                ranking_metric=ranking_metric,
+                                min_size=gsea_min_size,
+                                max_size=gsea_max_size,
+                                permutation_num=gsea_permutations
+                                )
+                                gsea_results_dict[gene_set] = gsea_results
+                            except Exception as e:
+                                gsea_results_dict[gene_set] = None
+                                logger.error(f"GSEA failed for gene set '{gene_set}': {e}", exc_info=True)
+                            finally:
+                                pass
+                        
+                        st.session_state.gsea_results_dict = gsea_results_dict
                         st.session_state.gsea_params_display = {  # Store params for context
                             'group': gsea_selected_group,
                             'gene_sets': gsea_gene_sets,
@@ -149,33 +177,54 @@ def render_gsea_tab():
     if st.session_state.get('gsea_error'):
         st.error(st.session_state.gsea_error)
 
-    if st.session_state.get('gsea_results_df') is not None:
-        gsea_df = st.session_state.gsea_results_df
-        gsea_params = st.session_state.gsea_params_display
+    if st.session_state.get('gsea_results_dict') is not None:
+        gsea_results_dict = st.session_state.get('gsea_results_dict', {})
+        gsea_params = st.session_state.get('gsea_params_display', {})
+        if gsea_params:
+            st.write(f"Displaying results for Group: **{gsea_params.get('group', 'N/A')}**")
 
-        st.write(f"Displaying results for Group: **{gsea_params.get('group', 'N/A')}**, Gene Set: **{gsea_params.get('gene_sets', 'N/A')}**")
+        any_results = False
+        for gene_set, gsea_df in gsea_results_dict.items():
+            if gsea_df is not None and not gsea_df.empty:
+                # Filter for significant results (e.g., FDR < 0.25 or p < 0.05)
+                sig_mask = None
+                for col in ['fdr', 'FDR q-val', 'FDR', 'qval', 'q_val', 'padj']:
+                    if col in gsea_df.columns:
+                        sig_mask = gsea_df[col] < 0.25
+                        break
+                if sig_mask is None:
+                    for col in ['pval', 'p_val', 'NOM p-val', 'p-val', 'pvalue']:
+                        if col in gsea_df.columns:
+                            sig_mask = gsea_df[col] < 0.05
+                            break
+                if sig_mask is not None:
+                    sig_df = gsea_df[sig_mask]
+                else:
+                    sig_df = gsea_df
 
-        if gsea_df.empty:
-            st.info("No significant pathways found with the current settings.")
-        else:
-            st.dataframe(
-                gsea_df,
-                use_container_width=True,
-                column_config={
-                    "NES": st.column_config.NumberColumn("NES", format="%.3f"),
-                    "p_val": st.column_config.NumberColumn("p-value", format="%.2E"),
-                    "fdr": st.column_config.NumberColumn("FDR q-value", format="%.2E"),
-                    "genes": st.column_config.ListColumn("Core Enrichment Genes", width="large")
-                }
-            )
-            # Add download button for GSEA results
-            csv = gsea_df.to_csv(index=False).encode('utf-8')
-            fname = sanitize_filename(f"gsea_prerank_{gsea_params.get('group', 'group')}_{gsea_params.get('gene_sets', 'geneset')}.csv")
-            st.download_button(
-                label="Download GSEA Results as CSV",
-                data=csv,
-                file_name=fname,
-                mime='text/csv',
-            )
+                if not sig_df.empty:
+                    any_results = True
+                    with st.expander(f"Gene Set: {gene_set} ({len(sig_df)} significant pathways)", expanded=False):
+                        st.dataframe(
+                            sig_df,
+                            use_container_width=True,
+                            column_config={
+                                "NES": st.column_config.NumberColumn("NES", format="%.3f"),
+                                "p_val": st.column_config.NumberColumn("p-value", format="%.2E"),
+                                "fdr": st.column_config.NumberColumn("FDR q-value", format="%.2E"),
+                                "genes": st.column_config.ListColumn("Core Enrichment Genes", width="large")
+                            }
+                        )
+                        # Download button for each gene set
+                        csv = sig_df.to_csv(index=False).encode('utf-8')
+                        fname = sanitize_filename(f"gsea_prerank_{gsea_params.get('group', 'group')}_{gene_set}.csv")
+                        st.download_button(
+                            label=f"Download {gene_set} Results as CSV",
+                            data=csv,
+                            file_name=fname,
+                            mime='text/csv',
+                        )
+        if not any_results:
+            st.info("No significant pathways found for any selected gene set with the current settings.")
     else:
         st.write("Run Pathway Analysis using the form above to see results.")
