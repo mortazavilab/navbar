@@ -213,9 +213,6 @@ if initial_file_to_load and not st.session_state.initial_load_attempted:
         st.session_state.initial_load_attempted = True # Mark attempt
 
 
-# --- Sidebar: File Upload and Data Selection ---
-st.sidebar.title("🔎 Navbar h5ad Explorer")
-
 # Check if a file was provided via command line or query parameters
 file_provided_externally = initial_file_to_load is not None
 
