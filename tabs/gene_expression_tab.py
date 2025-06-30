@@ -78,6 +78,43 @@ def render_gene_expression_tab(adata_vis, selected_embedding):
             plt.tight_layout(pad=0.5) # Add padding
             st.pyplot(fig_gene)
             logger.info("Gene expression plot displayed.")
+            
+            # Let user select a grouping column from adata.obs
+            obs_cats = [col for col in adata_vis.obs.columns if adata_vis.obs[col].dtype.name in ['category', 'object']]
+            if obs_cats:
+                st.markdown("#### Violin Plot by Group")
+                default_violin_index = 0
+                if 'leiden' in obs_cats:
+                    default_violin_index = obs_cats.index('leiden')  
+                groupby_col = st.selectbox(
+                    "Group cells by:",
+                    options=obs_cats,
+                    index=default_violin_index,
+                    key="gene_expr_violin_groupby",
+                    help="Choose a categorical column from adata.obs to group cells for violin plot."
+                )
+                if groupby_col:
+                    try:
+                        fig_violin = sc.pl.violin(
+                            adata_vis,
+                            keys=valid_genes,
+                            groupby=groupby_col,
+                            show=False,
+                            stripplot=False,
+                            multi_panel=True,
+                            rotation=90
+                        )
+                        if isinstance(fig_violin, plt.Axes):
+                            st.pyplot(fig_violin.figure)
+                        elif isinstance(fig_violin, (list, tuple)) and isinstance(fig_violin[0], plt.Axes):
+                            st.pyplot(fig_violin[0].figure)
+                        else:
+                            st.pyplot()
+                    except Exception as ve:
+                        st.error(f"Could not generate violin plot: {ve}")
+                        logger.error(f"Violin plot error: {ve}", exc_info=True)
+            else:
+                st.info("No categorical columns found in `adata.obs` for violin plot grouping.")
 
             # Download button for the composite figure
             try:
