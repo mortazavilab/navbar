@@ -10,16 +10,8 @@ import seaborn as sns # Import seaborn for heatmap AND barplot
 import re # Import regular expressions for pattern matching
 import datetime # Import datetime for time-dependent info
 
-# Use absolute imports from the assumed package root 'scanpy_viewer'
-# Adjust the paths if your structure differs
-try:
-    from scanpy_viewer.utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
-    from scanpy_viewer.config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
-except ImportError:
-    # Fallback for running script directly or if structure is different
-    from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
-    from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
-
+from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
+from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
 
 logger = logging.getLogger(__name__)
 
