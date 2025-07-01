@@ -1,4 +1,4 @@
-# scanpy_viewer/data_loader.py
+# navbar/data_loader.py
 
 import scanpy as sc
 import anndata as ad

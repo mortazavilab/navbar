@@ -1,4 +1,4 @@
-# scanpy_viewer/tabs/summary_tab.py
+# navbar/tabs/summary_tab.py
 import streamlit as st
 import pandas as pd
 import anndata as ad

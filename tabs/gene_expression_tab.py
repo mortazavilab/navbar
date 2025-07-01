@@ -1,4 +1,4 @@
-# scanpy_viewer/tabs/gene_expression_tab.py
+# navbar/tabs/gene_expression_tab.py
 
 import streamlit as st
 import scanpy as sc

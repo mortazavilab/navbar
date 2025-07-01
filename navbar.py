@@ -1,3 +1,4 @@
+# navbar/navbar.py
 import subprocess
 import sys
 import os

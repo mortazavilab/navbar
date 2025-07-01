@@ -1,4 +1,4 @@
-# scanpy_viewer/config.py
+# navbar/config.py
 
 import logging
 

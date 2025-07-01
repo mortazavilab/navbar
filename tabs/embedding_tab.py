@@ -1,4 +1,4 @@
-# scanpy_viewer/tabs/embedding_tab.py
+# navbar/tabs/embedding_tab.py
 
 import streamlit as st
 import scanpy as sc
