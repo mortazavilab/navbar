@@ -1,4 +1,4 @@
-# analysis/gsea_analysis.py
+# navbar/analysis/gsea_analysis.py
 import pandas as pd
 import logging
 import streamlit as st # For caching

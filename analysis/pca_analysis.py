@@ -1,4 +1,4 @@
-# scanpy_viewer/analysis/pca_analysis.py
+# navbar/analysis/pca_analysis.py
 
 import scanpy as sc
 import anndata as ad

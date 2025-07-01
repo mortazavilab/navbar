@@ -1,4 +1,4 @@
-# scanpy_viewer/analysis/__init__.py
+# navbar/analysis/__init__.py
 # This file makes 'analysis' a Python package.
 
 # Optionally import key functions to make them available directly

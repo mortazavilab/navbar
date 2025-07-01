@@ -1,4 +1,4 @@
-# scanpy_viewer/analysis/marker_analysis.py
+# navbar/analysis/marker_analysis.py
 
 import scanpy as sc
 import anndata as ad
