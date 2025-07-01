@@ -355,14 +355,6 @@ def aggregate_adata(adata_ref, grouping_vars, selected_layer_key, agg_func='sum'
         summary_msg = "\n".join(summary_lines)
         logger.info(summary_msg)
 
-        # Optional: if running in Streamlit, show in app as well
-        try:
-            st.markdown("#### Aggregation Summary (Debug)")
-            for l in summary_lines:
-                st.write(l)
-        except Exception:
-            pass  # If not in Streamlit, just skip
-
         logger.info("Aggregation and index processing complete.")
         return adata_agg # Return the processed aggregated AnnData object
         
