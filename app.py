@@ -10,6 +10,10 @@ import os # Need os for path operations
 import argparse
 from collections import OrderedDict
 import anndata as ad # Import AnnData
+import requests
+from io import BytesIO
+import tempfile
+import re
 
 from config import (
     MAX_CELLS, N_HVG_PSEUDOBULK, DEFAULT_N_MARKERS, CACHE_MAX_ENTRIES, AGGREGATION_LAYER_OPTIONS,
@@ -99,6 +103,9 @@ def _load_and_process_adata(file_source, source_name):
 
     return success
 
+def is_url(path_or_url):
+    return bool(re.match(r"^https?://", path_or_url, re.IGNORECASE))
+
 # --- Initial Setup ---
 st.set_page_config(layout="wide", page_title="Navbar")
 setup_logging(LOGGING_LEVEL)
@@ -150,12 +157,10 @@ if "active_tab" not in st.session_state:
 
 st.sidebar.title("🔎 Navbar h5ad Explorer")
 # --- Argument Parsing & Initial Load (Keep existing code) ---
-# ... (rest of the argument parsing and initial load logic remains the same) ...
 parsed_args = None
 try:
     parser = argparse.ArgumentParser(description="Navbar h5ad Explorer - Argument Parser")
     parser.add_argument("--h5ad", type=str, help="Path to h5ad file to load automatically via command line.")
-    # Use parse_known_args to avoid conflicts with Streamlit's own args
     parsed_args, _ = parser.parse_known_args()
     args_h5ad_path_cmd = parsed_args.h5ad if parsed_args else None
     if args_h5ad_path_cmd:
@@ -175,9 +180,15 @@ except Exception as e:
 
 args_h5ad_path = args_h5ad_path_cmd or args_h5ad_path_query
 initial_file_to_load = None
+initial_file_is_url = False
 if args_h5ad_path:
-    initial_file_to_load = os.path.expanduser(args_h5ad_path.strip())
-    logger.info(f"Using initial file path (cleaned and expanded): {initial_file_to_load}")
+    if is_url(args_h5ad_path.strip()):
+        initial_file_to_load = args_h5ad_path.strip()
+        initial_file_is_url = True
+        logger.info(f"Using initial URL: {initial_file_to_load}")
+    else:
+        initial_file_to_load = os.path.expanduser(args_h5ad_path.strip())
+        logger.info(f"Using initial file path (cleaned and expanded): {initial_file_to_load}")
 else:
      logger.info("No initial file path provided via --h5ad argument or h5ad query parameter.")
 
@@ -185,33 +196,45 @@ load_button = None
 # --- Attempt initial load ONLY if path provided AND not already attempted ---
 if initial_file_to_load and not st.session_state.initial_load_attempted:
     logger.info(f"Attempting initial load from command line/query param: {initial_file_to_load}")
-    # Perform path checks before calling load function
-    path_exists = os.path.exists(initial_file_to_load)
-    is_file = os.path.isfile(initial_file_to_load)
-    can_read = os.access(initial_file_to_load, os.R_OK) if path_exists and is_file else False
+    if initial_file_is_url:
+        try:
+            logger.info(f"Downloading h5ad from URL: {initial_file_to_load}")
+            response = requests.get(initial_file_to_load, stream=True)
+            response.raise_for_status()
+            file_source = BytesIO(response.content)
+            source_name = os.path.basename(initial_file_to_load)
+            load_success = _load_and_process_adata(file_source, source_name)
+            if load_success:
+                logger.info(f"Initial load successful for {source_name}")
+                st.success(f"Automatically loaded: {source_name}")
+        except Exception as e:
+            st.session_state.load_error_message = f"Failed to download or load h5ad from URL: {e}"
+            logger.error(f"Failed to download/load h5ad from URL: {e}", exc_info=True)
+            st.session_state.initial_load_attempted = True
+    else:
+        # Perform path checks before calling load function
+        path_exists = os.path.exists(initial_file_to_load)
+        is_file = os.path.isfile(initial_file_to_load)
+        can_read = os.access(initial_file_to_load, os.R_OK) if path_exists and is_file else False
 
-    if path_exists and is_file and can_read:
-        source_name = os.path.basename(initial_file_to_load)
-        # Call the helper function to load and process
-        load_success = _load_and_process_adata(initial_file_to_load, source_name)
-        if load_success:
-            logger.info(f"Initial load successful for {source_name}")
-            # Display success message immediately (will also show in sidebar later)
-            st.success(f"Automatically loaded: {source_name}")
-        # Error message is set within the helper and will be displayed later
-    elif not path_exists:
-        st.session_state.load_error_message = f"Error: Initial file not found: {initial_file_to_load}"
-        logger.warning(f"Initial file not found: {initial_file_to_load}")
-        st.session_state.initial_load_attempted = True # Mark attempt
-    elif not is_file:
-        st.session_state.load_error_message = f"Error: Initial path is not a file: {initial_file_to_load}"
-        logger.warning(f"Initial path is not a file: {initial_file_to_load}")
-        st.session_state.initial_load_attempted = True # Mark attempt
-    elif not can_read:
-        st.session_state.load_error_message = f"Error: Initial file found but no read permissions: {initial_file_to_load}"
-        logger.warning(f"Read permission denied for initial path: {initial_file_to_load}")
-        st.session_state.initial_load_attempted = True # Mark attempt
-
+        if path_exists and is_file and can_read:
+            source_name = os.path.basename(initial_file_to_load)
+            load_success = _load_and_process_adata(initial_file_to_load, source_name)
+            if load_success:
+                logger.info(f"Initial load successful for {source_name}")
+                st.success(f"Automatically loaded: {source_name}")
+        elif not path_exists:
+            st.session_state.load_error_message = f"Error: Initial file not found: {initial_file_to_load}"
+            logger.warning(f"Initial file not found: {initial_file_to_load}")
+            st.session_state.initial_load_attempted = True
+        elif not is_file:
+            st.session_state.load_error_message = f"Error: Initial path is not a file: {initial_file_to_load}"
+            logger.warning(f"Initial path is not a file: {initial_file_to_load}")
+            st.session_state.initial_load_attempted = True
+        elif not can_read:
+            st.session_state.load_error_message = f"Error: Initial file found but no read permissions: {initial_file_to_load}"
+            logger.warning(f"Read permission denied for initial path: {initial_file_to_load}")
+            st.session_state.initial_load_attempted = True
 
 # Check if a file was provided via command line or query parameters
 file_provided_externally = initial_file_to_load is not None
@@ -220,6 +243,7 @@ file_provided_externally = initial_file_to_load is not None
 if not file_provided_externally:
     st.sidebar.header("1. Load Data")
     uploaded_file = st.sidebar.file_uploader("Upload H5AD File", type=["h5ad"])
+    h5ad_url = st.sidebar.text_input("Or enter remote H5AD URL:", value="", key="h5ad_url_input")
     
     # Use the cleaned initial path as default *only if* no data has been successfully loaded yet via args
     default_path_value = initial_file_to_load if initial_file_to_load and st.session_state.adata_vis is None else ""
@@ -230,13 +254,11 @@ else:
     # Initialize variables to None when not showing the UI elements
     uploaded_file = None
     file_path_input = ""
+    h5ad_url = ""
     load_button = False
-    
-    # Optional: Show a message indicating the file was loaded from command line
     st.sidebar.text(f"Using file from command line: {os.path.basename(initial_file_to_load)}")
 
 if load_button:
-    # Logic is now simplified, mostly calls the helper function
     file_source = None
     source_name = "unknown"
     st.session_state.load_error_message = None # Reset error message specifically for button click
@@ -246,6 +268,17 @@ if load_button:
         source_name = uploaded_file.name
         logger.info(f"Load button clicked: Attempting to load from uploaded file: {source_name}")
         _load_and_process_adata(file_source, source_name) # Call helper
+    elif h5ad_url:
+        try:
+            logger.info(f"Load button clicked: Attempting to download h5ad from URL: {h5ad_url}")
+            response = requests.get(h5ad_url, stream=True)
+            response.raise_for_status()
+            file_source = BytesIO(response.content)
+            source_name = os.path.basename(h5ad_url)
+            _load_and_process_adata(file_source, source_name)
+        except Exception as e:
+            st.session_state.load_error_message = f"Failed to download or load h5ad from URL: {e}"
+            logger.error(f"Failed to download/load h5ad from URL: {e}", exc_info=True)
     elif file_path_input:
         cleaned_path_input = file_path_input.strip()
         if not cleaned_path_input:
@@ -273,7 +306,7 @@ if load_button:
                 st.session_state.load_error_message = f"Error: File found but no read permissions: {expanded_path}"
                 logger.warning(f"Read permission denied for path: {expanded_path}")
     else:
-        st.session_state.load_error_message = "Please upload an H5AD file or provide a valid file path."
+        st.session_state.load_error_message = "Please upload an H5AD file, provide a valid file path, or enter a remote URL."
 
     # Update sidebar success/info messages after button click attempt result
     # Check if loading was successful (adata_vis is now populated and no new error)
@@ -296,7 +329,6 @@ if st.session_state.load_error_message:
 # --- Main Application Area ---
 # Check if visualization data is valid AnnData before proceeding
 if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
-
     adata_vis = st.session_state.adata_vis
     # Ensure full data is also available or handle gracefully
     adata_full = st.session_state.get('adata_full')
