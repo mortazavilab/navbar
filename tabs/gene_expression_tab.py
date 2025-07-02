@@ -5,8 +5,10 @@ import scanpy as sc
 import matplotlib.pyplot as plt
 import logging
 import anndata as ad # Import AnnData
+import pandas as pd
 from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
 from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
+from tabs.heatmap_utils import create_plate_heatmap_fig
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +138,7 @@ def render_gene_expression_tab(adata_vis, selected_embedding):
                 st.error(f"An unexpected error occurred during plot download preparation: {dle}")
                 logger.error(f"Download button generation error: {dle}", exc_info=True)
 
-
+    
         except KeyError as ke:
             # This could happen if a gene name is somehow invalid despite checks
             st.error(f"Plotting Error: Gene '{ke}' caused an issue.")
@@ -150,7 +152,41 @@ def render_gene_expression_tab(adata_vis, selected_embedding):
             st.error(f"An unexpected error occurred during gene expression plotting: {e}")
             logger.error(f"Gene expression plot failed: {e}", exc_info=True)
             if fig_gene: plt.close(fig_gene) # Ensure figure is closed
-
+        obs_df = adata_vis.obs
+        if 'bc1_well' in obs_df.columns:
+            st.markdown("---")
+            st.subheader("Gene Expression Plate Heatmaps (bc1)")
+            for gene in valid_genes:
+                # Get mean expression per well for this gene
+                try:
+                    # Get expression vector for this gene
+                    gene_idx = adata_vis.var_names.get_loc(gene)
+                    expr = adata_vis.X[:, gene_idx].toarray().flatten() if hasattr(adata_vis.X, "toarray") else adata_vis.X[:, gene_idx]
+                    well_ids = obs_df['bc1_well'].astype(str)
+                    expr_by_well = pd.DataFrame({'well': well_ids, 'expr': expr}).groupby('well')['expr'].mean()
+                    plate_heatmap_fig = create_plate_heatmap_fig(
+                        title=f"{gene} Mean Expression (bc1 plate)",
+                            label="Mean Expression",
+                            well_counts=expr_by_well.to_dict()
+                        )
+                    st.pyplot(plate_heatmap_fig)
+                    # Download button
+                    try:
+                        fname_base = f"plate_heatmap_barcode_{gene}"
+                        fname = sanitize_filename(fname_base, extension=DEFAULT_PLOT_FORMAT)
+                        img_bytes = get_figure_bytes(plate_heatmap_fig, format=DEFAULT_PLOT_FORMAT, dpi=SAVE_PLOT_DPI)
+                        generate_download_button(img_bytes, filename=fname, label=f"Download Heatmap ({DEFAULT_PLOT_FORMAT.upper()})", mime=f"image/{DEFAULT_PLOT_FORMAT}", key=f"download_plate_heatmap_{gene}")
+                    except PlottingError as pe: 
+                        st.error(f"Error preparing plate heatmap download: {pe}")
+                    except Exception as dle: 
+                        st.error(f"Unexpected error during plate heatmap download: {dle}")
+                        logger.error(f"Plate heatmap download error: {dle}", exc_info=True)
+                except Exception as e:
+                    st.warning(f"Could not plot plate heatmap for {gene}: {e}")
+                finally:
+                    if plate_heatmap_fig: 
+                        plt.close(plate_heatmap_fig)
+        
     elif gene_input and not valid_genes:
         # If user entered text but none were valid
         st.warning("None of the entered genes were found in the dataset's `var_names`.")

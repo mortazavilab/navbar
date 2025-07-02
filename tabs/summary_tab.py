@@ -12,51 +12,9 @@ import datetime # Import datetime for time-dependent info
 
 from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
 from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
+from tabs.heatmap_utils import create_plate_heatmap_fig, create_heatmap_grid, parse_well_id, natural_sort_key
 
 logger = logging.getLogger(__name__)
-
-# --- Helper function to parse well IDs ---
-def parse_well_id(well_id):
-    if not isinstance(well_id, str) or not re.match(r"^[A-H]([1-9]|1[0-2])$", well_id, re.IGNORECASE): 
-        return None, None
-    row_char = well_id[0].upper()
-    col_str = well_id[1:]
-    row_idx = ord(row_char) - ord('A')
-    col_idx = int(col_str) - 1
-    return row_idx, col_idx
-
-# --- Helper function for natural sorting ---
-def natural_sort_key(s):
-    match = re.search(r'bc(\d+)_well', s)
-    return int(match.group(1)) if match else 999999
-
-# --- Function to create the heatmap data grid ---
-def create_heatmap_grid(well_counts):
-    heatmap_data = pd.DataFrame(np.nan, index=list('ABCDEFGH'), columns=range(1, 13))
-    valid_wells_found = 0; invalid_wells = set()
-    for well_id, count in well_counts.items():
-        row_idx, col_idx = parse_well_id(well_id)
-        if row_idx is not None and col_idx is not None:
-            row_char = chr(ord('A') + row_idx)
-            col_num = col_idx + 1
-            heatmap_data.loc[row_char, col_num] = count
-            valid_wells_found += 1
-        elif well_id not in invalid_wells:
-            if isinstance(well_id, str) and well_id.lower() != 'nan': 
-                logger.warning(f"Skipping invalid well ID: '{well_id}'")
-                invalid_wells.add(well_id)
-            elif not isinstance(well_id, str): 
-                logger.warning(f"Skipping non-string well ID: {well_id}") 
-                invalid_wells.add(str(well_id))
-    if valid_wells_found == 0:
-        if invalid_wells: 
-            logger.error("No valid 96-well IDs found.") 
-        else: 
-            logger.warning("No valid well counts found.")
-        return None
-    return heatmap_data
-# --- End Helper Functions ---
-
 
 def render_summary_tab(adata_vis):
     """Renders the dataset summary information tab."""
@@ -321,23 +279,9 @@ def render_summary_tab(adata_vis):
                             if well_counts.empty: 
                                 st.warning(f"`{well_col}`: No data.")
                                 continue
-                            heatmap_data = create_heatmap_grid(well_counts)
-                            if heatmap_data is None: 
-                                st.error(f"`{well_col}`: Failed to create grid.")
-                                continue
-                            plate_heatmap_fig, ax = plt.subplots(figsize=(10, 6.5))
-                            mask = heatmap_data.isnull()
-                            sns.heatmap(heatmap_data, annot=True, fmt=".0f", cmap="Reds", mask=mask, linewidths=0, linecolor='none', cbar=True, cbar_kws={'label': 'Number of Cells'}, square=False, ax=ax)
-                            ax.set_title(f"Cell Counts per Well ({nice_name})", pad=30)
-                            ax.set_xlabel("Plate Column")
-                            ax.set_ylabel("Plate Row")
-                            ax.xaxis.tick_top()
-                            ax.xaxis.set_label_position('top')
-                            ax.set_xticklabels(ax.get_xticklabels(), rotation=0); 
-                            ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
-                            ax.tick_params(axis='both', which='major', length=0)
-                            ax.grid(False)
-                            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                            heatmap_title = f"Cell Counts per Well ({nice_name})"
+                            heatmap_label = 'Number of Cells'
+                            plate_heatmap_fig = create_plate_heatmap_fig(heatmap_title, heatmap_label, well_counts.to_dict())
                             st.pyplot(plate_heatmap_fig)
                             # Download button
                             try:
