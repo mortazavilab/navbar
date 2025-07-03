@@ -155,7 +155,7 @@ if "active_tab" not in st.session_state:
     except:
         st.session_state.active_tab = "📄 Summary Info"
 
-st.sidebar.title("🔎 Navbar h5ad Explorer")
+st.sidebar.title("🔎 Navbar")
 # --- Argument Parsing & Initial Load (Keep existing code) ---
 parsed_args = None
 try:
@@ -339,7 +339,7 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
 
     adata_vis_hash = get_adata_hash(adata_vis) # Get hash for caching keys
 
-    st.header(f"Exploring: `{st.session_state.current_h5ad_source}`")
+    st.header(f"Navigating: `{st.session_state.current_h5ad_source}`")
     st.write(f"Using data: **{adata_vis.n_obs} cells** &times; **{adata_vis.n_vars} genes**")
     if adata_full is not None and hasattr(adata_full, 'n_obs') and adata_vis.n_obs < adata_full.n_obs:
         st.caption(f"(Subsampled from {adata_full.n_obs} cells for visualization and analysis where noted)")

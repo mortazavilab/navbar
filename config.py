@@ -19,7 +19,7 @@ SAVE_PLOT_DPI = 300
 DEFAULT_EMBEDDING = 'X_pca' # Default embedding to look for
 
 # --- Logging ---
-LOGGING_LEVEL = "INFO" # e.g., DEBUG, INFO, WARNING, ERROR
+LOGGING_LEVEL = "WARNING" # e.g., DEBUG, INFO, WARNING, ERROR
 # Use date in filenames?
 USE_DATE_IN_FILENAMES = False # Set to True to include date in download filenames
 
