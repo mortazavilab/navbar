@@ -261,45 +261,59 @@ def render_summary_tab(adata_vis):
         elif obs_df.empty: 
             st.info("`adata.obs` is empty.")
         else:
-            well_col_pattern = r"^bc\d+_well$"; possible_well_cols = [col for col in obs_df.columns if re.match(well_col_pattern, col)]
+            well_col_pattern = r"^bc\d+_well$"
+            possible_well_cols = [col for col in obs_df.columns if re.match(well_col_pattern, col)]
             if not possible_well_cols: 
                 st.warning("`plate` column found, but no `bcX_well` columns found.")
             else:
-                sorted_well_cols = sorted(possible_well_cols, key=natural_sort_key)
-                nice_well_names = [f"barcode {col.split('bc')[1].split('_')[0]}" for col in sorted_well_cols]
-                st.caption(f"Generating heatmaps for: {', '.join(nice_well_names)}")
-                for well_col in sorted_well_cols:
-                    barcode_number = well_col.split('bc')[1].split('_')[0]
-                    nice_name = f"barcode {barcode_number}"
-                    st.markdown(f"--- \n #### Heatmap for {nice_name}")
-                    plate_heatmap_fig = None
-                    try:
-                        with st.spinner(f"Generating heatmap: `{nice_name}`..."):
-                            well_counts = obs_df[well_col].astype(str).value_counts()
-                            if well_counts.empty: 
-                                st.warning(f"`{well_col}`: No data.")
-                                continue
-                            heatmap_title = f"Cell Counts per Well ({nice_name})"
-                            heatmap_label = 'Number of Cells'
-                            plate_heatmap_fig = create_plate_heatmap_fig(heatmap_title, heatmap_label, well_counts.to_dict())
-                            st.pyplot(plate_heatmap_fig)
-                            # Download button
-                            try:
-                                fname_base = f"plate_heatmap_barcode_{barcode_number}"
-                                fname = sanitize_filename(fname_base, extension=DEFAULT_PLOT_FORMAT)
-                                img_bytes = get_figure_bytes(plate_heatmap_fig, format=DEFAULT_PLOT_FORMAT, dpi=SAVE_PLOT_DPI)
-                                generate_download_button(img_bytes, filename=fname, label=f"Download Heatmap ({DEFAULT_PLOT_FORMAT.upper()})", mime=f"image/{DEFAULT_PLOT_FORMAT}", key=f"download_plate_heatmap_{well_col}")
-                            except PlottingError as pe: 
-                                st.error(f"Error preparing plate heatmap download: {pe}")
-                            except Exception as dle: 
-                                st.error(f"Unexpected error during plate heatmap download: {dle}")
-                                logger.error(f"Plate heatmap download error: {dle}", exc_info=True)
-                    except Exception as e: 
-                        logger.error(f"Error generating plate heatmap for '{well_col}': {e}", exc_info=True)
-                        st.error(f"Could not generate heatmap for `{well_col}`.")
-                    finally:
-                        if plate_heatmap_fig: 
-                            plt.close(plate_heatmap_fig)
+                # Group by plate
+                unique_plates = obs_df['plate'].dropna().unique()
+                for plate_id in unique_plates:
+                    st.markdown(f"---\n### Plate: `{plate_id}`")
+                    plate_df = obs_df[obs_df['plate'] == plate_id]
+                    if plate_df.empty:
+                        st.info(f"No data for plate `{plate_id}`.")
+                        continue
+                    sorted_well_cols = sorted(possible_well_cols, key=natural_sort_key)
+                    nice_well_names = [f"barcode {col.split('bc')[1].split('_')[0]}" for col in sorted_well_cols]
+                    st.caption(f"Generating heatmaps for: {', '.join(nice_well_names)}")
+                    for well_col in sorted_well_cols:
+                        barcode_number = well_col.split('bc')[1].split('_')[0]
+                        nice_name = f"barcode {barcode_number}"
+                        st.markdown(f"--- \n #### Heatmap for {nice_name}")
+                        plate_heatmap_fig = None
+                        try:
+                            with st.spinner(f"Generating heatmap: `{nice_name}`..."):
+                                well_counts = plate_df[well_col].astype(str).value_counts()
+                                if well_counts.empty: 
+                                    st.warning(f"`{well_col}`: No data for plate `{plate_id}`.")
+                                    continue
+                                heatmap_title = f"Cell Counts per Well ({nice_name}, Plate {plate_id})"
+                                heatmap_label = 'Number of Cells'
+                                plate_heatmap_fig = create_plate_heatmap_fig(heatmap_title, heatmap_label, well_counts.to_dict())
+                                st.pyplot(plate_heatmap_fig)
+                                # Download button
+                                try:
+                                    fname_base = f"plate_{plate_id}_heatmap_barcode_{barcode_number}"
+                                    fname = sanitize_filename(fname_base, extension=DEFAULT_PLOT_FORMAT)
+                                    img_bytes = get_figure_bytes(plate_heatmap_fig, format=DEFAULT_PLOT_FORMAT, dpi=SAVE_PLOT_DPI)
+                                    generate_download_button(
+                                        img_bytes, filename=fname,
+                                        label=f"Download Heatmap ({DEFAULT_PLOT_FORMAT.upper()})",
+                                        mime=f"image/{DEFAULT_PLOT_FORMAT}",
+                                        key=f"download_plate_heatmap_{plate_id}_{well_col}"
+                                    )
+                                except PlottingError as pe: 
+                                    st.error(f"Error preparing plate heatmap download: {pe}")
+                                except Exception as dle: 
+                                    st.error(f"Unexpected error during plate heatmap download: {dle}")
+                                    logger.error(f"Plate heatmap download error: {dle}", exc_info=True)
+                        except Exception as e: 
+                            logger.error(f"Error generating plate heatmap for '{well_col}' in plate '{plate_id}': {e}", exc_info=True)
+                            st.error(f"Could not generate heatmap for `{well_col}` in plate `{plate_id}`.")
+                        finally:
+                            if plate_heatmap_fig: 
+                                plt.close(plate_heatmap_fig)
 
 
         # --- Cell Count Distribution (Knee Plot) ---
