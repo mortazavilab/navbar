@@ -1,3 +1,4 @@
+# navbar/tabs/qc_tab.py
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
@@ -5,6 +6,8 @@ import pandas as pd
 import scipy.sparse
 import logging
 import re # Import regular expressions for pattern matching
+import seaborn as sns # Import seaborn for violin plots
+
 from config import DEFAULT_PLOT_FORMAT, SAVE_PLOT_DPI
 from utils import generate_download_button, get_figure_bytes, sanitize_filename, PlottingError
 from tabs.heatmap_utils import create_plate_heatmap_fig, natural_sort_key
@@ -85,6 +88,141 @@ def render_qc_tab(adata_vis):
     finally:
         if fig_knee: 
             plt.close(fig_knee)
+    
+    # --- Basic QC Metrics Violin Plots ---
+    st.markdown("---")
+    st.subheader("Basic QC Metrics") # Added chart and magnifying glass emojis
+
+    obs_df = adata_vis.obs if hasattr(adata_vis, 'obs') else pd.DataFrame()
+
+    if obs_df.empty:
+        st.info("`adata.obs` is empty. Cannot generate QC metrics plots.")
+        return # Exit the function if no observation data
+
+    # Define default QC metrics to plot
+    default_qc_metrics = {
+        "total_counts_raw": "Number of UMI detected",
+        "n_genes_by_counts_raw": "Number of genes detected",
+        "pct_counts_mt_raw": "% Mitochondrial reads",
+        "doublet_score": "% Doublets" 
+    }
+
+    # Filter for metrics actually present in adata.obs
+    available_metrics = {k: v for k, v in default_qc_metrics.items() if k in obs_df.columns}
+
+    if not available_metrics:
+        st.info("No default QC metrics (UMI, genes, mitochondrial reads, doublets) found in `adata.obs`.")
+
+
+    # Get all available observation columns for grouping
+    potential_grouping_cols = []
+    for col in obs_df.columns:
+        if obs_df[col].dtype in ['category', 'object', 'bool']:
+            # Ensure there's at least one non-NA value to count unique values meaningfully
+            if obs_df[col].notna().any():
+                if obs_df[col].nunique() < 50: # Keep the limit for practical plotting
+                    potential_grouping_cols.append(col)
+    
+    grouping_variables = ['None'] + sorted(potential_grouping_cols) # Sort for consistent order
+
+    selected_grouping_var = st.selectbox(
+        "Select grouping variable (optional):",
+        grouping_variables,
+        index=0, # 'None' selected by default
+        key="qc_grouping_var"
+    )
+    if selected_grouping_var == 'None':
+        st.markdown("##### Overall Distribution")
+        
+        # Max number of columns for plots. We'll adjust the figure size.
+        num_plots_to_show = len(available_metrics)
+        # Create columns - using the number of available metrics or a max of 4
+        cols = st.columns(min(num_plots_to_show, 4)) # Ensure we don't try to make more than 4 columns
+
+        plot_index = 0
+        for metric_col, metric_label in available_metrics.items():
+            # Place each plot within its own column
+            with cols[plot_index % len(cols)]: # Cycle through columns if more than 4 plots
+                # Use an expander for each plot
+                with st.expander(f"**{metric_label}**", expanded=True):
+                    fig_violin, ax_violin = plt.subplots(figsize=(6, 4)) # Adjusted for smaller display in columns
+                    try:
+                        sns.violinplot(y=obs_df[metric_col], ax=ax_violin, inner="quartile", color="skyblue")
+                        ax_violin.set_title(metric_label) # Title inside expander is enough
+                        ax_violin.set_ylabel(metric_label)
+                        st.pyplot(fig_violin)
+
+                        # Download button directly below the plot inside the expander
+                        try:
+                            fname_base = sanitize_filename(f"qc_violin_{metric_col}")
+                            fname = sanitize_filename(fname_base, extension=DEFAULT_PLOT_FORMAT)
+                            img_bytes = get_figure_bytes(fig_violin, format=DEFAULT_PLOT_FORMAT, dpi=SAVE_PLOT_DPI)
+                            generate_download_button(img_bytes, filename=fname, label=f"Download Plot ({DEFAULT_PLOT_FORMAT.upper()})", mime=f"image/{DEFAULT_PLOT_FORMAT}", key=f"download_violin_{metric_col}")
+                        except PlottingError as pe:
+                            st.error(f"Error preparing {metric_label} download: {pe}")
+                        except Exception as dle:
+                            st.error(f"Unexpected error during {metric_label} download: {dle}")
+                            logger.error(f"{metric_label} download error: {dle}", exc_info=True)
+                    except Exception as e:
+                        logger.error(f"Error generating violin plot for {metric_col}: {e}", exc_info=True)
+                        st.error(f"Could not generate violin plot for {metric_label}.")
+                    finally:
+                        plt.close(fig_violin)
+            plot_index += 1
+    else: 
+        st.markdown(f"##### Distribution by `{selected_grouping_var}`")
+        if selected_grouping_var not in obs_df.columns or obs_df[selected_grouping_var].isnull().all():
+            st.warning(f"Selected grouping variable '{selected_grouping_var}' not found or contains only missing values.")
+        else:
+            for metric_col, metric_label in available_metrics.items():
+                with st.expander(f"**{metric_label} by {selected_grouping_var}**", expanded=True):
+                    fig_violin, ax_violin = plt.subplots(figsize=(10, 6))
+                    try:
+                        # Filter out NaN values in the grouping column for plotting
+                        plot_data = obs_df.dropna(subset=[selected_grouping_var])
+                        if plot_data.empty:
+                            st.info(f"No data to plot for {metric_label} when grouped by '{selected_grouping_var}' (after dropping NaNs).")
+                            plt.close(fig_violin)
+                            continue
+
+                        # Sort unique categories naturally for better visualization
+                        unique_categories = plot_data[selected_grouping_var].unique()
+                        sorted_categories = sorted(unique_categories, key=natural_sort_key)
+                        
+                        # Ensure the order is maintained in the plot
+                        plot_data[selected_grouping_var] = pd.Categorical(plot_data[selected_grouping_var], categories=sorted_categories, ordered=True)
+
+                        sns.violinplot(
+                            x=selected_grouping_var,
+                            y=metric_col,
+                            data=plot_data,
+                            ax=ax_violin,
+                            inner="quartile",
+                            palette="viridis"
+                        )
+                        ax_violin.set_title(f"{metric_label} by {selected_grouping_var}")
+                        ax_violin.set_xlabel(selected_grouping_var)
+                        ax_violin.set_ylabel(metric_label)
+                        plt.xticks(rotation=45, ha='right')
+                        plt.tight_layout()
+                        st.pyplot(fig_violin)
+
+                        # Download button
+                        try:
+                            fname_base = sanitize_filename(f"qc_violin_{metric_col}_by_{selected_grouping_var}")
+                            fname = sanitize_filename(fname_base, extension=DEFAULT_PLOT_FORMAT)
+                            img_bytes = get_figure_bytes(fig_violin, format=DEFAULT_PLOT_FORMAT, dpi=SAVE_PLOT_DPI)
+                            generate_download_button(img_bytes, filename=fname, label=f"Download Plot ({DEFAULT_PLOT_FORMAT.upper()})", mime=f"image/{DEFAULT_PLOT_FORMAT}", key=f"download_violin_{metric_col}_by_{selected_grouping_var}")
+                        except PlottingError as pe:
+                            st.error(f"Error preparing {metric_label} download: {pe}")
+                        except Exception as dle:
+                            st.error(f"Unexpected error during {metric_label} download: {dle}")
+                            logger.error(f"{metric_label} download error: {dle}", exc_info=True)
+                    except Exception as e:
+                        logger.error(f"Error generating violin plot for {metric_col} grouped by {selected_grouping_var}: {e}", exc_info=True)
+                        st.error(f"Could not generate violin plot for {metric_label} grouped by {selected_grouping_var}.")
+                    finally:
+                        plt.close(fig_violin)
     
     # --- Well Cell Count Heatmaps ---
     st.markdown("---")
