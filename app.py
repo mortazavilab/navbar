@@ -34,7 +34,7 @@ from analysis.deg_analysis import prepare_metadata_and_run_deseq, PYDESEQ2_INSTA
 from analysis.gsea_analysis import run_gsea_prerank, GSEAPY_INSTALLED, AVAILABLE_GENE_SETS, RANK_GROUP_COL, RANK_SCORE_COL
 
 # Import tab rendering functions using absolute paths
-from tabs import summary_tab, embedding_tab, gene_expression_tab, marker_genes_tab, pseudobulk_pca_tab, pseudobulk_deg_tab, gsea_tab
+from tabs import summary_tab, qc_tab, embedding_tab, gene_expression_tab, marker_genes_tab, pseudobulk_pca_tab, pseudobulk_deg_tab, gsea_tab
 
 
 # --- Helper Function for Loading & Processing ---
@@ -449,12 +449,13 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
 
     # --- Define Tabs ---
     tab_keys = [
-        "📄 Summary Info", 
-        "📊 Embedding Plot",
+        "📄 Summary Info",
+        "📋 QC", 
+        "🗺️ Embedding Plot",
         "📈 Gene Expression",
-        "🧬 Marker Genes",
+        "🔬 Marker Genes",
         "📊 Pathway Analysis",
-        "🔬 Pseudobulk PCA",
+        "🧬 Pseudobulk PCA",
         "🧪 Pseudobulk DEG"
     ]
 
@@ -467,14 +468,14 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
     # Get the currently selected tab index based on session state
     selected_tab_index = tab_keys.index(st.session_state.active_tab) if st.session_state.active_tab in tab_keys else 0
     # Unpack tabs corresponding to keys
-    tab_summary, tab_embedding, tab_gene_expr, tab_markers, tab_gsea, tab_pca, tab_deg = tab_objects
-
-    # --- Analysis Execution Forms (Placed within relevant tab context) ---
+    tab_summary, tab_qc, tab_embedding, tab_gene_expr, tab_markers, tab_gsea, tab_pca, tab_deg = tab_objects
 
     # -- Render Tabs using Imported Functions ---
-    #--- Pathway Analysis Tab ---
     with tab_summary: 
         summary_tab.render_summary_tab(adata_vis)
+
+    with tab_qc:
+        qc_tab.render_qc_tab(adata_vis)
 
     with tab_embedding: # Embedding Plot
         embedding_tab.render_embedding_tab(
@@ -513,7 +514,6 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
             valid_obs_cat_cols=valid_obs_cat_cols,
             dynamic_layer_options=dynamic_layer_options
         )
-
 
 # --- Footer or Initial Prompt ---
 elif not load_button and st.session_state.adata_full is None and not st.session_state.load_error_message:
