@@ -6,10 +6,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging
 import sys
-import os # Need os for path operations
+import os
 import argparse
+import csv
 from collections import OrderedDict
-import anndata as ad # Import AnnData
+import anndata as ad
 import requests
 from io import BytesIO
 import tempfile
@@ -27,13 +28,11 @@ from utils import (
 from data_loader import load_h5ad, subsample_adata
 from aggregation import aggregate_adata, cached_aggregate_adata
 
-# Import analysis functions from their specific modules
 from analysis.marker_analysis import calculate_rank_genes_df
 from analysis.pca_analysis import preprocess_and_run_pca
 from analysis.deg_analysis import prepare_metadata_and_run_deseq, PYDESEQ2_INSTALLED
 from analysis.gsea_analysis import run_gsea_prerank, GSEAPY_INSTALLED, AVAILABLE_GENE_SETS, RANK_GROUP_COL, RANK_SCORE_COL
 
-# Import tab rendering functions using absolute paths
 from tabs import summary_tab, qc_tab, embedding_tab, gene_expression_tab, marker_genes_tab, pseudobulk_pca_tab, pseudobulk_deg_tab, gsea_tab
 
 
@@ -144,6 +143,18 @@ for key, value in default_state.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
+# --- Tab keys (define early for session state) ---
+tab_keys = [
+    "📄 Summary Info",
+    "📋 QC", 
+    "🗺️ Embedding Plot",
+    "📈 Gene Expression",
+    "🔬 Marker Genes",
+    "📊 Pathway Analysis",
+    "🧬 Pseudobulk PCA",
+    "🧪 Pseudobulk DEG"
+]
+
 if "active_tab" not in st.session_state:
     # Check if tab is in query params
     tab_from_query = st.query_params.get("tab")
@@ -156,218 +167,219 @@ if "active_tab" not in st.session_state:
         st.session_state.active_tab = "📄 Summary Info"
 
 st.sidebar.title("🔎 Navbar")
-# --- Argument Parsing & Initial Load (Keep existing code) ---
+# --- Argument Parsing & Config Splash ---
 parsed_args = None
 try:
     parser = argparse.ArgumentParser(description="Navbar h5ad Explorer - Argument Parser")
     parser.add_argument("--h5ad", type=str, help="Path to h5ad file to load automatically via command line.")
+    parser.add_argument("--config", type=str, help="CSV file with dataID,dataPath entries.")
     parsed_args, _ = parser.parse_known_args()
+    config_path = parsed_args.config if parsed_args else None
     args_h5ad_path_cmd = parsed_args.h5ad if parsed_args else None
-    if args_h5ad_path_cmd:
-         logger.info(f"Found --h5ad command-line argument: {args_h5ad_path_cmd}")
 except Exception as e:
     logger.warning(f"Argparse failed, possibly due to Streamlit context: {e}")
+    config_path = None
     args_h5ad_path_cmd = None
 
-args_h5ad_path_query = None
-try:
-    args_h5ad_path_query = st.query_params.get("h5ad")
-    if args_h5ad_path_query:
-         logger.info(f"Found 'h5ad' query parameter: {args_h5ad_path_query}")
-except Exception as e:
-    logger.debug(f"Could not check query_params (may not be in Streamlit server context yet): {e}")
+# --- If config file provided, parse it ---
+config_entries = []
+if config_path and os.path.exists(config_path):
+    with open(config_path, newline='') as csvfile:
+        reader = csv.reader(csvfile)
+        for row in reader:
+            if len(row) == 2:
+                config_entries.append({'dataID': row[0], 'dataPath': row[1]})
+
+# --- Splash page for dataset selection ---
+if config_entries and 'selected_dataID' not in st.session_state:
+    st.title("🔎 Navbar")
+    st.header("Select a dataset to load")
+    data_ids = [entry['dataID'] for entry in config_entries]
+    selected_idx = st.radio("Choose a dataset:", options=range(len(data_ids)), format_func=lambda i: data_ids[i], key="dataset_radiobox")
+    if st.button("Load Selected Dataset"):
+        st.session_state.selected_dataID = data_ids[selected_idx]
+        st.session_state.selected_dataPath = config_entries[selected_idx]['dataPath']
+        st.rerun()
+    st.stop()
+
+# --- Use selected dataset if chosen ---
+if config_entries and 'selected_dataID' in st.session_state:
+    initial_file_to_load = st.session_state.selected_dataPath
+    initial_file_is_url = is_url(initial_file_to_load)
+    st.sidebar.info(f"Selected dataset: {st.session_state.selected_dataID}")
+    # Optionally, allow user to reset selection
+    if st.sidebar.button("Choose a different dataset"):
+        del st.session_state.selected_dataID
+        del st.session_state.selected_dataPath
+        st.session_state.initial_load_attempted = False
+        st.rerun()
+else:
+    # --- Argument Parsing & Initial Load for --h5ad and query param ---
     args_h5ad_path_query = None
+    try:
+        args_h5ad_path_query = st.query_params.get("h5ad")
+        if args_h5ad_path_query:
+            logger.info(f"Found 'h5ad' query parameter: {args_h5ad_path_query}")
+    except Exception as e:
+        logger.debug(f"Could not check query_params: {e}")
+        args_h5ad_path_query = None
 
-args_h5ad_path = args_h5ad_path_cmd or args_h5ad_path_query
-initial_file_to_load = None
-initial_file_is_url = False
-if args_h5ad_path:
-    if is_url(args_h5ad_path.strip()):
-        initial_file_to_load = args_h5ad_path.strip()
-        initial_file_is_url = True
-        logger.info(f"Using initial URL: {initial_file_to_load}")
-    else:
-        initial_file_to_load = os.path.expanduser(args_h5ad_path.strip())
-        logger.info(f"Using initial file path (cleaned and expanded): {initial_file_to_load}")
-else:
-     logger.info("No initial file path provided via --h5ad argument or h5ad query parameter.")
-
-load_button = None
-# --- Attempt initial load ONLY if path provided AND not already attempted ---
-if initial_file_to_load and not st.session_state.initial_load_attempted:
-    logger.info(f"Attempting initial load from command line/query param: {initial_file_to_load}")
-    if initial_file_is_url:
-        try:
-            logger.info(f"Downloading h5ad from URL: {initial_file_to_load}")
-            response = requests.get(initial_file_to_load, stream=True)
-            response.raise_for_status()
-            file_source = BytesIO(response.content)
-            source_name = os.path.basename(initial_file_to_load)
-            load_success = _load_and_process_adata(file_source, source_name)
-            if load_success:
-                logger.info(f"Initial load successful for {source_name}")
-                st.success(f"Automatically loaded: {source_name}")
-        except Exception as e:
-            st.session_state.load_error_message = f"Failed to download or load h5ad from URL: {e}"
-            logger.error(f"Failed to download/load h5ad from URL: {e}", exc_info=True)
-            st.session_state.initial_load_attempted = True
-    else:
-        # Perform path checks before calling load function
-        path_exists = os.path.exists(initial_file_to_load)
-        is_file = os.path.isfile(initial_file_to_load)
-        can_read = os.access(initial_file_to_load, os.R_OK) if path_exists and is_file else False
-
-        if path_exists and is_file and can_read:
-            source_name = os.path.basename(initial_file_to_load)
-            load_success = _load_and_process_adata(initial_file_to_load, source_name)
-            if load_success:
-                logger.info(f"Initial load successful for {source_name}")
-                st.success(f"Automatically loaded: {source_name}")
-        elif not path_exists:
-            st.session_state.load_error_message = f"Error: Initial file not found: {initial_file_to_load}"
-            logger.warning(f"Initial file not found: {initial_file_to_load}")
-            st.session_state.initial_load_attempted = True
-        elif not is_file:
-            st.session_state.load_error_message = f"Error: Initial path is not a file: {initial_file_to_load}"
-            logger.warning(f"Initial path is not a file: {initial_file_to_load}")
-            st.session_state.initial_load_attempted = True
-        elif not can_read:
-            st.session_state.load_error_message = f"Error: Initial file found but no read permissions: {initial_file_to_load}"
-            logger.warning(f"Read permission denied for initial path: {initial_file_to_load}")
-            st.session_state.initial_load_attempted = True
-
-# Check if a file was provided via command line or query parameters
-file_provided_externally = initial_file_to_load is not None
-
-# Only show the data loading section if no file was provided externally
-if not file_provided_externally:
-    st.sidebar.header("1. Load Data")
-    uploaded_file = st.sidebar.file_uploader("Upload H5AD File", type=["h5ad"])
-    h5ad_url = st.sidebar.text_input("Or enter remote H5AD URL:", value="", key="h5ad_url_input")
-    
-    # Use the cleaned initial path as default *only if* no data has been successfully loaded yet via args
-    default_path_value = initial_file_to_load if initial_file_to_load and st.session_state.adata_vis is None else ""
-    file_path_input = st.sidebar.text_input("Or enter file path:", value=default_path_value)
-    
-    load_button = st.sidebar.button("Load AnnData", key="load_data_button")
-else:
-    # Initialize variables to None when not showing the UI elements
-    uploaded_file = None
-    file_path_input = ""
-    h5ad_url = ""
-    load_button = False
-    st.sidebar.text(f"Using file from command line: {os.path.basename(initial_file_to_load)}")
-
-if load_button:
-    file_source = None
-    source_name = "unknown"
-    st.session_state.load_error_message = None # Reset error message specifically for button click
-
-    if uploaded_file is not None:
-        file_source = uploaded_file.getvalue()
-        source_name = uploaded_file.name
-        logger.info(f"Load button clicked: Attempting to load from uploaded file: {source_name}")
-        _load_and_process_adata(file_source, source_name) # Call helper
-    elif h5ad_url:
-        try:
-            logger.info(f"Load button clicked: Attempting to download h5ad from URL: {h5ad_url}")
-            response = requests.get(h5ad_url, stream=True)
-            response.raise_for_status()
-            file_source = BytesIO(response.content)
-            source_name = os.path.basename(h5ad_url)
-            _load_and_process_adata(file_source, source_name)
-        except Exception as e:
-            st.session_state.load_error_message = f"Failed to download or load h5ad from URL: {e}"
-            logger.error(f"Failed to download/load h5ad from URL: {e}", exc_info=True)
-    elif file_path_input:
-        cleaned_path_input = file_path_input.strip()
-        if not cleaned_path_input:
-            st.session_state.load_error_message = "File path input cannot be empty or only whitespace."
+    args_h5ad_path = args_h5ad_path_cmd or args_h5ad_path_query
+    initial_file_to_load = None
+    initial_file_is_url = False
+    if args_h5ad_path:
+        if is_url(args_h5ad_path.strip()):
+            initial_file_to_load = args_h5ad_path.strip()
+            initial_file_is_url = True
+            logger.info(f"Using initial URL: {initial_file_to_load}")
         else:
-            expanded_path = os.path.expanduser(cleaned_path_input)
-            logger.info(f"Load button clicked: User provided path '{file_path_input}', cleaned to '{cleaned_path_input}', expanded to '{expanded_path}'")
-            path_exists = os.path.exists(expanded_path)
-            is_file = os.path.isfile(expanded_path)
-            can_read = os.access(expanded_path, os.R_OK) if path_exists and is_file else False
-
-            if path_exists and is_file and can_read:
-                file_source = expanded_path
-                source_name = os.path.basename(expanded_path)
-                logger.info(f"Path check successful. Attempting load via button.")
-                _load_and_process_adata(file_source, source_name) # Call helper
-            # Handle errors for button press load attempt
-            elif not path_exists:
-                st.session_state.load_error_message = f"Error: File not found: {expanded_path}"
-                logger.warning(f"File check failed for path: {expanded_path}")
-            elif not is_file:
-                st.session_state.load_error_message = f"Error: Path is not a file: {expanded_path}"
-                logger.warning(f"Path is not a file: {expanded_path}")
-            elif not can_read:
-                st.session_state.load_error_message = f"Error: File found but no read permissions: {expanded_path}"
-                logger.warning(f"Read permission denied for path: {expanded_path}")
+            initial_file_to_load = os.path.expanduser(args_h5ad_path.strip())
+            logger.info(f"Using initial file path: {initial_file_to_load}")
     else:
-        st.session_state.load_error_message = "Please upload an H5AD file, provide a valid file path, or enter a remote URL."
+        logger.info("No initial file path provided via --h5ad argument or h5ad query parameter.")
 
-    # Update sidebar success/info messages after button click attempt result
-    # Check if loading was successful (adata_vis is now populated and no new error)
-    if st.session_state.adata_vis is not None and not st.session_state.load_error_message:
-        if st.session_state.adata_full is not None: # Ensure full is loaded too
-            st.sidebar.success(f"Loaded: {st.session_state.current_h5ad_source}\n({st.session_state.adata_full.n_obs} obs x {st.session_state.adata_full.n_vars} vars)")
-            if st.session_state.adata_vis.n_obs < st.session_state.adata_full.n_obs:
-                st.sidebar.info(f"Using {st.session_state.adata_vis.n_obs} cells for visualization (subsampled from {st.session_state.adata_full.n_obs}).")
+    # --- Sidebar upload/URL/path logic ---
+    file_provided_externally = initial_file_to_load is not None
+    if not file_provided_externally:
+        st.sidebar.header("1. Load Data")
+        uploaded_file = st.sidebar.file_uploader("Upload H5AD File", type=["h5ad"])
+        h5ad_url = st.sidebar.text_input("Or enter remote H5AD URL:", value="", key="h5ad_url_input")
+        default_path_value = initial_file_to_load if initial_file_to_load and st.session_state.adata_vis is None else ""
+        file_path_input = st.sidebar.text_input("Or enter file path:", value=default_path_value)
+        load_button = st.sidebar.button("Load AnnData", key="load_data_button")
+    else:
+        uploaded_file = None
+        file_path_input = ""
+        h5ad_url = ""
+        load_button = False
+        st.sidebar.text(f"Using file from command line: {os.path.basename(initial_file_to_load)}")
+
+    if load_button:
+        file_source = None
+        source_name = "unknown"
+        st.session_state.load_error_message = None
+        if uploaded_file is not None:
+            file_source = uploaded_file.getvalue()
+            source_name = uploaded_file.name
+            logger.info(f"Load button clicked: Attempting to load from uploaded file: {source_name}")
+            _load_and_process_adata(file_source, source_name)
+        elif h5ad_url:
+            try:
+                logger.info(f"Load button clicked: Attempting to download h5ad from URL: {h5ad_url}")
+                response = requests.get(h5ad_url, stream=True)
+                response.raise_for_status()
+                file_source = BytesIO(response.content)
+                source_name = os.path.basename(h5ad_url)
+                _load_and_process_adata(file_source, source_name)
+            except Exception as e:
+                st.session_state.load_error_message = f"Failed to download or load h5ad from URL: {e}"
+                logger.error(f"Failed to download/load h5ad from URL: {e}", exc_info=True)
+        elif file_path_input:
+            cleaned_path_input = file_path_input.strip()
+            if not cleaned_path_input:
+                st.session_state.load_error_message = "File path input cannot be empty or only whitespace."
             else:
-                st.sidebar.info(f"Using all {st.session_state.adata_vis.n_obs} cells for visualization.")
-        else: # Should not happen if helper ran correctly, but handle case
-             st.sidebar.warning("Data loaded for visualization, but full data reference missing.")
+                expanded_path = os.path.expanduser(cleaned_path_input)
+                logger.info(f"Load button clicked: User provided path '{file_path_input}', cleaned to '{cleaned_path_input}', expanded to '{expanded_path}'")
+                path_exists = os.path.exists(expanded_path)
+                is_file = os.path.isfile(expanded_path)
+                can_read = os.access(expanded_path, os.R_OK) if path_exists and is_file else False
+                if path_exists and is_file and can_read:
+                    file_source = expanded_path
+                    source_name = os.path.basename(expanded_path)
+                    logger.info(f"Path check successful. Attempting load via button.")
+                    _load_and_process_adata(file_source, source_name)
+                elif not path_exists:
+                    st.session_state.load_error_message = f"Error: File not found: {expanded_path}"
+                    logger.warning(f"File check failed for path: {expanded_path}")
+                elif not is_file:
+                    st.session_state.load_error_message = f"Error: Path is not a file: {expanded_path}"
+                    logger.warning(f"Path is not a file: {expanded_path}")
+                elif not can_read:
+                    st.session_state.load_error_message = f"Error: File found but no read permissions: {expanded_path}"
+                    logger.warning(f"Read permission denied for path: {expanded_path}")
+        else:
+            st.session_state.load_error_message = "Please upload an H5AD file, provide a valid file path, or enter a remote URL."
+        if st.session_state.adata_vis is not None and not st.session_state.load_error_message:
+            if st.session_state.adata_full is not None:
+                st.sidebar.success(f"Loaded: {st.session_state.current_h5ad_source}\n({st.session_state.adata_full.n_obs} obs x {st.session_state.adata_full.n_vars} vars)")
+                if st.session_state.adata_vis.n_obs < st.session_state.adata_full.n_obs:
+                    st.sidebar.info(f"Using {st.session_state.adata_vis.n_obs} cells for visualization (subsampled from {st.session_state.adata_full.n_obs}).")
+                else:
+                    st.sidebar.info(f"Using all {st.session_state.adata_vis.n_obs} cells for visualization.")
+            else:
+                st.sidebar.warning("Data loaded for visualization, but full data reference missing.")
 
-# Display loading errors if any (from initial load or button press)
-# Ensure error is displayed *after* potential success messages from initial load are cleared
+# --- Progress bar for loading (for config/cmd/query param) ---
+if 'initial_file_to_load' in locals() and initial_file_to_load and not st.session_state.initial_load_attempted:
+    logger.info(f"Attempting initial load from config/cmd: {initial_file_to_load}")
+    with st.spinner("Loading data..."):
+        progress = st.progress(0)
+        try:
+            if initial_file_is_url:
+                response = requests.get(initial_file_to_load, stream=True)
+                total = int(response.headers.get('content-length', 0))
+                bytes_io = BytesIO()
+                downloaded = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        bytes_io.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            progress.progress(min(downloaded / total, 1.0))
+                file_source = BytesIO(bytes_io.getvalue())
+                source_name = os.path.basename(initial_file_to_load)
+            else:
+                file_source = initial_file_to_load
+                source_name = os.path.basename(initial_file_to_load)
+            load_success = _load_and_process_adata(file_source, source_name)
+            progress.progress(1.0)
+            if load_success:
+                logger.info(f"Initial load successful for {source_name}")
+                st.success(f"Automatically loaded: {source_name}")
+        except Exception as e:
+            st.session_state.load_error_message = f"Failed to download or load h5ad: {e}"
+            logger.error(f"Failed to download/load h5ad: {e}", exc_info=True)
+            st.session_state.initial_load_attempted = True
+        finally:
+            progress.empty()
+
+# --- Display loading errors if any ---
 if st.session_state.load_error_message:
     st.sidebar.error(st.session_state.load_error_message)
 
-
 # --- Main Application Area ---
-# Check if visualization data is valid AnnData before proceeding
 if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
     adata_vis = st.session_state.adata_vis
-    # Ensure full data is also available or handle gracefully
     adata_full = st.session_state.get('adata_full')
     if not isinstance(adata_full, ad.AnnData):
         logger.warning("Full AnnData object is not available or invalid.")
-        # Ensure adata_full is at least an empty AnnData for marker check resilience
-        adata_full = ad.AnnData() # Create empty AnnData as fallback
-
-    adata_vis_hash = get_adata_hash(adata_vis) # Get hash for caching keys
-
+        adata_full = ad.AnnData()
+    adata_vis_hash = get_adata_hash(adata_vis)
     st.header(f"Navigating: `{st.session_state.current_h5ad_source}`")
     st.write(f"Using data: **{adata_vis.n_obs} cells** &times; **{adata_vis.n_vars} genes**")
     if adata_full is not None and hasattr(adata_full, 'n_obs') and adata_vis.n_obs < adata_full.n_obs:
         st.caption(f"(Subsampled from {adata_full.n_obs} cells for visualization and analysis where noted)")
 
-
     # --- Dynamically get options from adata_vis ---
-    # Use try-except for robustness if obs/obsm might be missing or empty
     obs_cat_cols, obsm_keys, layer_keys = [], [], []
-    valid_obs_cat_cols = [""] # Default if extraction fails
+    valid_obs_cat_cols = [""] 
     valid_obsm_keys = [""]
-    dynamic_layer_options_base = AGGREGATION_LAYER_OPTIONS.copy() # Start with base options
-
+    dynamic_layer_options_base = AGGREGATION_LAYER_OPTIONS.copy()
     try:
         if hasattr(adata_vis, 'obs') and not adata_vis.obs.empty:
             obs_cols = adata_vis.obs.columns.tolist()
-            # Filter out potential all-NA columns which can cause issues in selectbox/multiselect
             obs_cat_cols = [
                 col for col in obs_cols
                 if (pd.api.types.is_categorical_dtype(adata_vis.obs[col]) or pd.api.types.is_object_dtype(adata_vis.obs[col]))
                    and adata_vis.obs[col].notna().any()
             ]
-            valid_obs_cat_cols = obs_cat_cols if obs_cat_cols else [""] # Ensure at least one empty option
+            valid_obs_cat_cols = obs_cat_cols if obs_cat_cols else [""]
         else:
             logger.warning("adata_vis.obs is missing or empty.")
     except Exception as e:
         logger.error(f"Error accessing adata_vis.obs columns: {e}")
         st.warning("Could not read observation columns (`adata.obs`).", icon="⚠️")
-
     try:
         if hasattr(adata_vis, 'obsm') and adata_vis.obsm:
             obsm_keys = list(adata_vis.obsm.keys())
@@ -379,50 +391,42 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
         logger.error(f"Error accessing adata_vis.obsm keys: {e}")
         st.warning("Could not read embedding keys (`adata.obsm`).", icon="⚠️")
         valid_obsm_keys = [""]
-
     try:
         if hasattr(adata_vis, 'layers') and adata_vis.layers:
             layer_keys = list(adata_vis.layers.keys())
     except Exception as e:
         logger.error(f"Error accessing adata_vis.layers keys: {e}")
         st.warning("Could not read layer keys (`adata.layers`).", icon="⚠️")
-
-    # Combine dynamic layer options
     dynamic_layer_options = dynamic_layer_options_base + layer_keys
 
-
     # --- Sidebar Visualization Options ---
-    if load_button or initial_file_to_load: # Check if data was loaded
+    if 'load_button' in locals() and load_button or initial_file_to_load:
         st.sidebar.header("Visualization Options")
     else:
-        st.sidebar.header("2. Visualization Options") # Keep number if no auto-load
-    # Embedding selection
+        st.sidebar.header("2. Visualization Options")
     default_embedding_index = 0
     if DEFAULT_EMBEDDING in valid_obsm_keys:
         try: default_embedding_index = valid_obsm_keys.index(DEFAULT_EMBEDDING)
         except ValueError: pass
-    elif 'X_umap' in valid_obsm_keys: # Check specific fallback
+    elif 'X_umap' in valid_obsm_keys:
         try: default_embedding_index = valid_obsm_keys.index('X_umap')
         except ValueError: pass
-    elif 'X_tsne' in valid_obsm_keys: # Check specific fallback
+    elif 'X_tsne' in valid_obsm_keys:
         try: default_embedding_index = valid_obsm_keys.index('X_tsne')
         except ValueError: pass
-    elif 'X_pca' in valid_obsm_keys: # Fallback to PCA if others missing
+    elif 'X_pca' in valid_obsm_keys:
         try: default_embedding_index = valid_obsm_keys.index('X_pca')
         except ValueError: pass
-
     st.session_state.sidebar_selection_embedding = st.sidebar.selectbox(
-            "Embedding:",
-            options=valid_obsm_keys,
-            index=default_embedding_index,
-            key="embedding_select_sidebar",
-            help="Select the precomputed embedding coordinates from `adata.obsm`."
-            )
-
-    # Prioritized Default for Color Selection
-    default_color_index = 0 # Default to the first option
-    if valid_obs_cat_cols and valid_obs_cat_cols != [""]: # Check if list has valid columns
-        preferred_defaults = ['leiden', 'louvain'] # Order of preference
+        "Embedding:",
+        options=valid_obsm_keys,
+        index=default_embedding_index,
+        key="embedding_select_sidebar",
+        help="Select the precomputed embedding coordinates from `adata.obsm`."
+    )
+    default_color_index = 0
+    if valid_obs_cat_cols and valid_obs_cat_cols != [""]:
+        preferred_defaults = ['leiden', 'louvain']
         found_preferred = False
         for preferred_key in preferred_defaults:
             if preferred_key in valid_obs_cat_cols:
@@ -430,95 +434,68 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
                     default_color_index = valid_obs_cat_cols.index(preferred_key)
                     logger.info(f"Found preferred default color key: '{preferred_key}' at index {default_color_index}")
                     found_preferred = True
-                    break # Stop after finding the first preferred key
+                    break
                 except ValueError:
-                    pass # Should not happen if check passed, but good practice
-        if not found_preferred and valid_obs_cat_cols: # Ensure list isn't empty before accessing index 0
+                    pass
+        if not found_preferred and valid_obs_cat_cols:
             logger.info(f"Preferred default keys ({preferred_defaults}) not found. Defaulting to first categorical column: '{valid_obs_cat_cols[0]}'")
-            default_color_index = 0 # Explicitly set back to 0 if loop didn't find anything
-
-    # Color selection (Categorical only for now)
+            default_color_index = 0
     st.session_state.sidebar_selection_color = st.sidebar.selectbox(
-            "Color Cells By:",
-            options=valid_obs_cat_cols,
-            index=default_color_index, # Use calculated default index
-            key="color_select_sidebar",
-            help="Select categorical observation data from `adata.obs` to color cells."
-            )
+        "Color Cells By:",
+        options=valid_obs_cat_cols,
+        index=default_color_index,
+        key="color_select_sidebar",
+        help="Select categorical observation data from `adata.obs` to color cells."
+    )
 
 
     # --- Define Tabs ---
-    tab_keys = [
-        "📄 Summary Info",
-        "📋 QC", 
-        "🗺️ Embedding Plot",
-        "📈 Gene Expression",
-        "🔬 Marker Genes",
-        "📊 Pathway Analysis",
-        "🧬 Pseudobulk PCA",
-        "🧪 Pseudobulk DEG"
-    ]
-
-    # Create the tabs with st.tabs
     tab_objects = st.tabs(tab_keys)
-    # Update query parameter to match active tab
     if st.session_state.active_tab in tab_keys:
         st.query_params["tab"] = st.session_state.active_tab
-
-    # Get the currently selected tab index based on session state
     selected_tab_index = tab_keys.index(st.session_state.active_tab) if st.session_state.active_tab in tab_keys else 0
-    # Unpack tabs corresponding to keys
     tab_summary, tab_qc, tab_embedding, tab_gene_expr, tab_markers, tab_gsea, tab_pca, tab_deg = tab_objects
 
-    # -- Render Tabs using Imported Functions ---
     with tab_summary: 
         summary_tab.render_summary_tab(adata_vis)
-
     with tab_qc:
         qc_tab.render_qc_tab(adata_vis)
-
-    with tab_embedding: # Embedding Plot
+    with tab_embedding:
         embedding_tab.render_embedding_tab(
             adata_vis,
             st.session_state.sidebar_selection_embedding,
             st.session_state.sidebar_selection_color
         )
-
-    with tab_gene_expr: # Gene Expression
+    with tab_gene_expr:
         gene_expression_tab.render_gene_expression_tab(
             adata_vis,
             st.session_state.sidebar_selection_embedding
         )
-
-    with tab_markers: # Marker Genes Display (Form is also here)
+    with tab_markers:
         marker_genes_tab.render_marker_genes_tab(
             adata_vis=adata_vis,
-            adata_full=adata_full, # Pass full adata for checking precomputed markers
+            adata_full=adata_full,
             valid_obs_cat_cols=valid_obs_cat_cols,
-            selected_color_var=st.session_state.sidebar_selection_color # Pass sidebar selection for context
+            selected_color_var=st.session_state.sidebar_selection_color
         )
-    
     with tab_gsea:
         gsea_tab.render_gsea_tab()
-
-    with tab_pca: # Pseudobulk PCA Display (Form is also here)
+    with tab_pca:
         pseudobulk_pca_tab.render_pseudobulk_pca_tab(
             adata_vis=adata_vis,
             valid_obs_cat_cols=valid_obs_cat_cols,
             dynamic_layer_options=dynamic_layer_options
         )
-
-    with tab_deg: # Pseudobulk DEG Display (Form is also here)
+    with tab_deg:
         pseudobulk_deg_tab.render_pseudobulk_deg_tab(
             adata_vis=adata_vis,
             valid_obs_cat_cols=valid_obs_cat_cols,
             dynamic_layer_options=dynamic_layer_options
         )
 
-# --- Footer or Initial Prompt ---
-elif not load_button and st.session_state.adata_full is None and not st.session_state.load_error_message:
+elif not ('load_button' in locals() and load_button) and st.session_state.adata_full is None and not st.session_state.load_error_message:
     st.info("⬅️ Upload an H5AD file or provide a valid file path (e.g., using `--h5ad` argument) to begin.")
 
-# Add a final check for the case where adata_vis failed to initialize properly
 elif st.session_state.load_error_message and st.session_state.adata_vis is None:
     st.error(f"Could not initialize data. Error: {st.session_state.load_error_message}")
+
