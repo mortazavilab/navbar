@@ -97,15 +97,29 @@ def render_qc_tab(adata_vis):
 
     if obs_df.empty:
         st.info("`adata.obs` is empty. Cannot generate QC metrics plots.")
-        return # Exit the function if no observation data
+        return
 
-    # Define default QC metrics to plot
-    default_qc_metrics = {
-        "total_counts_raw": "Number of UMI detected",
-        "n_genes_by_counts_raw": "Number of genes detected",
-        "pct_counts_mt_raw": "% Mitochondrial reads",
-        "doublet_score": "% Doublets" 
-    }
+    # --- Robust QC metric selection ---
+    raw_metric_keys = ["total_counts_raw", "n_genes_by_counts_raw", "pct_counts_mt_raw"]
+    nonraw_metric_keys = ["total_counts", "n_genes_by_counts", "pct_counts_mt"]
+
+    # Check if all raw columns are present
+    if all(col in obs_df.columns for col in raw_metric_keys):
+        default_qc_metrics = {
+            "total_counts_raw": "Number of UMI detected",
+            "n_genes_by_counts_raw": "Number of genes detected",
+            "pct_counts_mt_raw": "% Mitochondrial reads"
+        }
+    else:
+        default_qc_metrics = {
+            "total_counts": "Number of UMI detected",
+            "n_genes_by_counts": "Number of genes detected",
+            "pct_counts_mt": "% Mitochondrial reads"
+        }
+
+    # Optionally add doublet_score if present
+    if "doublet_score" in obs_df.columns:
+        default_qc_metrics["doublet_score"] = "% Doublets"
 
     # Filter for metrics actually present in adata.obs
     available_metrics = {k: v for k, v in default_qc_metrics.items() if k in obs_df.columns}
