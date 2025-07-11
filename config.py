@@ -2,6 +2,8 @@
 
 import logging
 
+APP_VERSION = "0.5"
+
 # --- General Configuration ---
 MAX_CELLS = 20000  # Max cells for visualization after subsampling
 DEFAULT_N_MARKERS = 5 # Default number of markers to show/calculate
@@ -25,3 +27,4 @@ USE_DATE_IN_FILENAMES = False # Set to True to include date in download filename
 
 # --- Caching ---
 CACHE_MAX_ENTRIES = 5 # Max entries for Streamlit memory cache
+

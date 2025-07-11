@@ -17,7 +17,7 @@ import tempfile
 import re
 
 from config import (
-    MAX_CELLS, N_HVG_PSEUDOBULK, DEFAULT_N_MARKERS, CACHE_MAX_ENTRIES, AGGREGATION_LAYER_OPTIONS,
+    APP_VERSION, MAX_CELLS, N_HVG_PSEUDOBULK, DEFAULT_N_MARKERS, CACHE_MAX_ENTRIES, AGGREGATION_LAYER_OPTIONS,
     MARKER_METHODS, DEFAULT_PCA_COMPONENTS, MIN_DESEQ_COUNT_SUM, PLOT_FILE_FORMATS, LOGGING_LEVEL,
     DEFAULT_PLOT_DPI, SAVE_PLOT_DPI, DEFAULT_EMBEDDING
 )
@@ -166,7 +166,7 @@ if "active_tab" not in st.session_state:
     except:
         st.session_state.active_tab = "📄 Summary Info"
 
-st.sidebar.title("🔎 Navbar")
+st.sidebar.title(f"🔎 Navbar v{APP_VERSION}")
 # --- Argument Parsing & Config Splash ---
 parsed_args = None
 try:
