@@ -129,7 +129,7 @@ python code/navbar/navbar.py -- --config IGVF.csv
 
 MIT License
 
-Copyright (c) [Your Name or Lab]
+Copyright (c) Ali Mortazavi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
