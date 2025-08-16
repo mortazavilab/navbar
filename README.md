@@ -73,21 +73,21 @@ where `dataPath` is a local file path or a URL.
 
 **Example `IGVF.csv`:**
 ```
-Adrenal_Founder_8Cube,/local/path/IGVF/Adrenal_integrated_processed_annotated_fixed_subsampled20k.h5ad
-CX_HC_Founder_8Cube,/local/path/IGVF/CortexHippocampus_integrated_processed_annotated_fixed_subsampled20k.h5ad
-DE_Pit_Founder_8Cube,/local/path/IGVF/DiencephalonPituitary_integrated_processed_annotated_fixed_subsampled20k.h5ad
-Gastroc_Founder_8Cube,/local/path/IGVF/Gastrocnemius_integrated_processed_annotated_fixed_raw_subsampled20k.h5ad
-Gonads_Female_Founder_8Cube,/local/path/IGVF/GonadsFemale_integrated_processed_annotated_fixed_subsampled20k.h5ad
-Gonads_Male_Founder_8Cube,/local/path/IGVF/GonadsMale_integrated_processed_annotated_fixed_subsampled20k.h5ad
-Heart_Founder_8Cube,/local/path/IGVF/Heart_integrated_processed_annotated_fixed_subsampled20k.h5ad
-Kidney_Founder_8Cube,/local/path/IGVF/Kidney_integrated_processed_annotated_fixed_subsampled20k.h5ad
-Liver_Founder_8Cube,/local/path/IGVF/Liver_integrated_processed_annotated_fixed_subsampled20k.h5ad
-brdige_supool,https://api.data.igvf.org/matrix-files/IGVFFI3320ZCCE/@@download/IGVFFI3320ZCCE.h5ad
+Adrenal_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI1398CMEX/@@download/IGVFFI1398CMEX.h5ad
+CX_HC_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI0968TUZT/@@download/IGVFFI0968TUZT.h5ad
+DE_Pit_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI8973OQHG/@@download/IGVFFI8973OQHG.h5ad
+Gastroc_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI7132PQNS/@@download/IGVFFI7132PQNS.h5ad
+Gonads_Female_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI3402EZDO/@@download/IGVFFI3402EZDO.h5ad
+Gonads_Male_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI6602LGHO/@@download/IGVFFI6602LGHO.h5ad
+Heart_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI6644FMFS/@@download/IGVFFI6644FMFS.h5ad
+Kidney_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI3941URLH/@@download/IGVFFI3941URLH.h5ad
+Liver_Founder_8Cube,https://api.data.igvf.org/matrix-files/IGVFFI8026GCPM/@@download/IGVFFI8026GCPM.h5ad
+bridge_supool,https://api.data.igvf.org/matrix-files/IGVFFI3320ZCCE/@@download/IGVFFI3320ZCCE.h5ad
 ```
 
 **To launch with a config file:**
 ```sh
-python code/navbar/navbar.py -- --config IGVF.csv
+python code/navbar/navbar.py -- --config code/navbar/IGVF.csv
 ```
 
 You will be presented with a splash page to select which dataset to load.
