@@ -34,7 +34,7 @@ from analysis.deg_analysis import prepare_metadata_and_run_deseq, PYDESEQ2_INSTA
 from analysis.gsea_analysis import run_gsea_prerank, GSEAPY_INSTALLED, AVAILABLE_GENE_SETS, RANK_GROUP_COL, RANK_SCORE_COL
 
 from tabs import summary_tab, qc_tab, embedding_tab, gene_expression_tab, marker_genes_tab, pseudobulk_pca_tab, pseudobulk_deg_tab, gsea_tab
-
+#from tabs import summary_tab, qc_tab, embedding_tab, gene_expression_tab, marker_genes_tab, pseudobulk_pca_tab, pseudobulk_deg_tab, gsea_tab, clustering_tab
 
 # --- Helper Function for Loading & Processing ---
 def _load_and_process_adata(file_source, source_name):
@@ -153,6 +153,8 @@ tab_keys = [
     "📊 Pathway Analysis",
     "🧬 Pseudobulk PCA",
     "🧪 Pseudobulk DEG"
+    #"🧪 Pseudobulk DEG",
+    #"🧬 Clustering Analysis"
 ]
 
 if "active_tab" not in st.session_state:
@@ -200,6 +202,11 @@ if config_entries and 'selected_dataID' not in st.session_state:
         st.session_state.selected_dataID = data_ids[selected_idx]
         st.session_state.selected_dataPath = config_entries[selected_idx]['dataPath']
         st.rerun()
+    st.markdown("---")
+    st.caption(
+        "© Mortazavi Lab. "
+        "[GitHub](https://github.com/mortazavilab/navbar)"
+    )
     st.stop()
 
 # --- Use selected dataset if chosen ---
@@ -317,18 +324,37 @@ if 'initial_file_to_load' in locals() and initial_file_to_load and not st.sessio
         progress = st.progress(0)
         try:
             if initial_file_is_url:
-                response = requests.get(initial_file_to_load, stream=True)
+                # Stream to a temporary file (faster & avoids high memory use)
+                session = requests.Session()
+                # Optional: tune retries/adapters here if desired
+                response = session.get(initial_file_to_load, stream=True, timeout=60)
+                response.raise_for_status()
                 total = int(response.headers.get('content-length', 0))
-                bytes_io = BytesIO()
                 downloaded = 0
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        bytes_io.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            progress.progress(min(downloaded / total, 1.0))
-                file_source = BytesIO(bytes_io.getvalue())
-                source_name = os.path.basename(initial_file_to_load)
+                chunk_size = 1024 * 1024  # 64 KB chunks
+                tmpf = None
+                try:
+                    import tempfile
+                    tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".h5ad")
+                    with open(tmpf.name, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=chunk_size):
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                progress.progress(min(downloaded / total, 1.0))
+                    # pass the temporary file path to your loader (avoids copying into memory)
+                    file_source = tmpf.name
+                    source_name = os.path.basename(initial_file_to_load)
+                except Exception:
+                    # ensure tmp file removed on failure
+                    if tmpf is not None:
+                        try:
+                            os.unlink(tmpf.name)
+                        except Exception:
+                            pass
+                    raise
             else:
                 file_source = initial_file_to_load
                 source_name = os.path.basename(initial_file_to_load)
@@ -455,6 +481,8 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
         st.query_params["tab"] = st.session_state.active_tab
     selected_tab_index = tab_keys.index(st.session_state.active_tab) if st.session_state.active_tab in tab_keys else 0
     tab_summary, tab_qc, tab_embedding, tab_gene_expr, tab_markers, tab_gsea, tab_pca, tab_deg = tab_objects
+    #tab_summary, tab_qc, tab_embedding, tab_gene_expr, tab_markers, tab_gsea, tab_pca, tab_deg, tab_clustering = tab_objects
+
 
     with tab_summary: 
         summary_tab.render_summary_tab(adata_vis)
@@ -492,6 +520,11 @@ if isinstance(st.session_state.get('adata_vis'), ad.AnnData):
             valid_obs_cat_cols=valid_obs_cat_cols,
             dynamic_layer_options=dynamic_layer_options
         )
+    #with tab_clustering:
+    #    clustering_tab.render_clustering_tab(
+    #        adata_vis=adata_vis,
+    #        valid_obs_cat_cols=valid_obs_cat_cols
+    #    )
 
 elif not ('load_button' in locals() and load_button) and st.session_state.adata_full is None and not st.session_state.load_error_message:
     st.info("⬅️ Upload an H5AD file or provide a valid file path (e.g., using `--h5ad` argument) to begin.")
@@ -499,3 +532,8 @@ elif not ('load_button' in locals() and load_button) and st.session_state.adata_
 elif st.session_state.load_error_message and st.session_state.adata_vis is None:
     st.error(f"Could not initialize data. Error: {st.session_state.load_error_message}")
 
+st.markdown("---")
+st.caption(
+    "© Mortazavi Lab. "
+    "[GitHub](https://github.com/mortazavilab/navbar)"
+)
